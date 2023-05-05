@@ -17,9 +17,13 @@ from collections.abc import MutableMapping
 from contextlib import ExitStack, closing, contextmanager
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, Generator, Iterable, Iterator, Optional, Reversible, Tuple, Type
+from typing import Any, Generator, Iterable, Iterator, Optional, Reversible, Tuple, Type, Union
 from weakref import finalize
 from enum import unique, Enum
+
+from tpcollections.util import Identifier
+
+from . import db, serializers
 
 @unique
 class Order(str, Enum):
@@ -28,30 +32,12 @@ class Order(str, Enum):
 
     ID = 'id'
     KEY = 'key'
-    EXPIRE = 'expire'
 
     def __str__(self) -> str:
         return self.value
 
     def __format__(self, format_spec: str) -> str:
         return self.value.__format__(format_spec)
-
-@contextmanager
-def _transaction(
-    connection: sqlite3.Connection,
-    begin: str,
-) -> Generator[None, None, None]:
-    with closing(connection.cursor()) as cursor:
-        cursor.execute(begin)
-    try:
-        yield
-    except:
-        with closing(connection.cursor()) as cursor:
-            cursor.execute('ROLLBACK')
-        raise
-    else:
-        with closing(connection.cursor()) as cursor:
-            cursor.execute('COMMIT')
 
 class _Keys(Reversible, Iterable[str]):
     __slots__ = (
@@ -152,191 +138,26 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
     def __reversed__(self) -> Iterator[Tuple[str, Any]]:
         return self._iterator('DESC')
 
-class SqliteDict:
-    """
-    Set up the sqlite dictionary manager.
-
-    This needs to be used as a context manager.  It will not operate at all
-    otherwise. args and kwargs are directly passed to sqlite3.connect.  Use
-    these to customize your connection, such as making it read-only.
-
-    This is lazy, and won't even open the database until it is entered.  It may
-    be re-opened after it has closed.
-    """
-
-    __slots__ = (
-        '_args',
-        '_kwargs',
-        '_connection',
-        '_exit_stack',
-        '_serializer',
-        '_lifespan',
-        '_begin',
-        '_table',
-        '__weakref__'
-    )
-
-    def __init__(self,
-        *args,
-        serializer: Any = json,
-        lifespan: timedelta = timedelta(weeks=1),
-        transaction: str = 'IMMEDIATE',
-        table: str = 'tpcollections',
-        **kwargs,
-    ) -> None:
-        self._args = args
-        self._kwargs = kwargs
-        self._serializer = serializer
-        self._lifespan = lifespan
-        self._begin = f'BEGIN {transaction} TRANSACTION'
-        self._table = table
-
-    @property
-    def lifespan(self) -> timedelta:
-        '''The current lifespan.
-
-        Changing this will change the calculated expiration time of future set
-        items.  It will not retroactively apply to existing items unless you explicitly
-        postpone them.
-        '''
-        return self._lifespan
-
-    @lifespan.setter
-    def lifespan(self, value: timedelta) -> None:
-        self._lifespan = value
-
-    def __enter__(self) -> 'Connection':
-        with ExitStack() as exit_stack:
-            self._connection = exit_stack.enter_context(closing(sqlite3.connect(
-                *self._args,
-                isolation_level=None,
-                **self._kwargs,
-            )))
-
-            with closing(self._connection.cursor()) as cursor:
-                cursor.execute('PRAGMA journal_mode=WAL')
-                cursor.execute('PRAGMA synchronous=NORMAL')
-
-            def optimize() -> None:
-                with closing(self._connection.cursor()) as cursor:
-                    cursor.execute('PRAGMA analysis_limit=8192')
-                    cursor.execute('PRAGMA optimize')
-
-            exit_stack.callback(optimize)
-
-            exit_stack.enter_context(_transaction(self._connection, self._begin))
-
-            connection = Connection(
-                self._connection,
-                serializer=self._serializer,
-                lifespan=self._lifespan,
-                table=self._table,
-            )
-            self._exit_stack = exit_stack.pop_all()
-            return connection
-
-        assert False, 'UNREACHABLE'
-
-    def __exit__(
-        self,
-        type: Optional[Type[BaseException]],
-        value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> bool:
-        try:
-            return self._exit_stack.__exit__(type, value, traceback)
-        finally:
-            del self._connection, self._exit_stack
-
-def SimpleSqliteDict(
-    *args,
-    serializer: Any = json,
-    lifespan: timedelta = timedelta(weeks=1),
-    isolation_level: Optional[str] = None,
-    table: str = 'tpcollections',
-    **kwargs,
-) -> 'Connection':
-    """
-    Set up the sqlite dictionary manager as a non-contextmanager with a finalizer.
-
-    If you set the isolation_level, you will be responsible for calling
-    d.connection.commit() and d.connection.rollback() appropriately.
-    """
-
-    db = sqlite3.connect(*args, isolation_level=isolation_level, **kwargs)
-    with closing(db.cursor()) as cursor:
-        cursor.execute('PRAGMA journal_mode=WAL')
-        cursor.execute('PRAGMA synchronous=NORMAL')
-
-    connection = Connection(
-        db,
-        serializer=serializer,
-        lifespan=lifespan,
-        table=table,
-    )
-
-    def _close():
-        '''Optimize and close the database.
-        '''
-        with closing(db) as d, closing(d.cursor()) as cursor:
-            cursor.execute('PRAGMA analysis_limit=8192')
-            cursor.execute('PRAGMA optimize')
-
-    finalize(connection, _close)
-
-    return connection
-
-_trailers = []
-
-if sqlite3.sqlite_version_info >= (3, 37):
-    _trailers.append('STRICT')
-    _valuetype = 'ANY'
-else:
-    _valuetype = 'BLOB'
-
-_trailer = ', '.join(_trailers)
-
-if sqlite3.sqlite_version_info >= (3, 38):
-    _unixepoch = 'UNIXEPOCH()'
-else:
-    _unixepoch = "CAST(strftime('%s', 'now') AS INTEGER)"
-
-APPLICATION_ID = 1820903862
-
-class Connection(MutableMapping):
-    '''The actual connection object, as a MutableMapping[str, Any].
-
-    Items are expired when a value is inserted or updated.  Deletion or
-    postponement does not expire items.
+class Mapping(db.Base, MutableMapping):
+    '''A database mapping.
     '''
 
     __slots__ = (
-        '_lifespan',
-        '_serializer',
-        '_connection',
-        '_table',
-        '_safe_table',
-        '__weakref__',
+        '_key_serializer',
+        '_value_serializer',
     )
 
     def __init__(self,
-        connection: sqlite3.Connection,
-        serializer: Any = json,
-        lifespan: timedelta = timedelta(weeks=1),
-        table: str = 'tpcollections',
+        connection: db.Connection,
+        database: Union[Identifier, str] = 'main',
+        table: Union[Identifier, str] = 'mapping',
+        key_serializer: serializers.Serializer = serializers.deterministic_json,
+        value_serializer: serializers.Serializer = serializers.pickle,
     ) -> None:
-        self._lifespan = lifespan.total_seconds()
-        self._serializer = serializer
-        self._connection = connection
-        self._table = table
-        self._safe_table = table.replace('"', '""')
+        super().__init__(connection, database, table, 'mapping')
 
-        with closing(self._connection.cursor()) as cursor:
-            application_id = next(cursor.execute('PRAGMA application_id'))[0]
-            if application_id == 0:
-                cursor.execute(f'PRAGMA application_id = {APPLICATION_ID}')
-            elif application_id != APPLICATION_ID:
-                raise ValueError(f'illegal application ID {application_id}')
+        self._key_serializer = key_serializer
+        self._value_serializer = value_serializer
 
             user_version = next(cursor.execute('PRAGMA user_version'))[0]
 

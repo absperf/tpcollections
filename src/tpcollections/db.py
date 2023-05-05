@@ -170,15 +170,12 @@ class Database:
 STRICT: str = ''
 ANY: str = 'BLOB'
 WITHOUT_ROWID: str = ''
-_strict_without_rowid_trailers: List[str] = []
 
 if sqlite3.sqlite_version_info >= (3, 37):
-    _strict_without_rowid_trailers.append('STRICT')
     STRICT = 'STRICT'
     ANY = 'ANY'
 
 if sqlite3.sqlite_version_info >= (3, 8, 2):
-    _strict_without_rowid_trailers.append('WITHOUT ROWID')
     WITHOUT_ROWID = 'WITHOUT ROWID'
 
 if sqlite3.sqlite_version_info >= (3, 38):
@@ -188,9 +185,7 @@ else:
 
 APPLICATION_ID = -1238962565
 
-STRICT_WITHOUT_ROWID = ', '.join(_strict_without_rowid_trailers)
-
-del _strict_without_rowid_trailers
+STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
 
 class Connection(MutableMapping):
     '''The actual connection object, as a MutableMapping[str, Any].
@@ -244,15 +239,23 @@ class Base:
     __slots__ = (
         '_connection',
         '_database',
+        '_table',
     )
 
     def __init__(
         self,
         connection: Connection,
-        database: Union[Identifier, str] = 'main',
+        database: Union[Identifier, str],
+        table: Union[Identifier, str],
+        type: str,
     ) -> None:
         self._connection = connection
-        self._database = Identifier(database)
+        if isinstance(database, str):
+            database = Identifier(database)
+        self._database = database
+        if isinstance(table, str):
+            table = Identifier(table)
+        self._table = table
 
         with closing(connection.connection.cursor()) as cursor:
             application_id = next(cursor.execute('PRAGMA application_id'))[0]
@@ -263,8 +266,38 @@ class Base:
 
             user_version = next(cursor.execute('PRAGMA user_version'))[0]
             if user_version == 0:
-                cursor.execute(f'PRAGMA user_version = {APPLICATION_ID}')
-            elif user_version != APPLICATION_ID:
-                raise ValueError(f'illegal application ID {user_version}')
+                cursor.execute(f'PRAGMA user_version = 1')
 
-        user_version = next(cursor.execute('PRAGMA user_version'))[0]
+            if not connection.read_only:
+                cursor.execute(f'''
+                    CREATE TABLE IF NOT EXISTS {database}.tpcollections (
+                        name TEXT PRIMARY KEY NOT NULL,
+                        type TEXT NOT NULL,
+                        version INTEGER NOT NULL
+                    ) {STRICT_WITHOUT_ROWID}
+                ''')
+            cursor.execute(f'''
+                SELECT type
+                    FROM {database}.tpcollections
+                    WHERE name = ?
+            ''', (table.value,))
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute(f'''
+                    INSERT INTO {database}.tpcollections 
+                        (name, type, version)
+                        VALUES (?, ?, ?)
+                ''', (table.value, type, 0))
+            else:
+                existing_type, = row
+
+                if type != existing_type:
+                    raise ValueError(f'Tried to open {database}.{table.value}'
+                        f' as {type}, but it already existed as {existing_type}')
+    @property
+    def database(self) -> Identifier:
+        return self._database
+
+    @property
+    def table(self) -> Identifier:
+        return self._table
