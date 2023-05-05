@@ -1,0 +1,33 @@
+[project]
+name = 'tpcollections'
+description = 'Persistent transactional Python collections'
+version = '1.0.0'
+readme = 'README.rst'
+requires-python = '>= 3.6, < 4'
+license = { text = 'Apache 2.0' }
+classifiers = [
+    'Development Status :: 1 - Planning',
+    'Intended Audience :: Developers',
+    'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Topic :: Database :: Front-Ends',
+    'Topic :: Software Development :: Libraries :: Python Modules',
+]
+
+[[project.authors]]
+name = "Taylor C. Richberger"
+email = "tcr@absolute-performance.com"
+
+[project.urls]
+repository  = 'https://github.com/absperf/tpcollections'
+documentation = 'https://tpcollections.readthedocs.io/'
+
+[build-system]
+build-backend = "flit_core.buildapi"
+requires = ["flit_core >=3.2,<4", 'wheel']
