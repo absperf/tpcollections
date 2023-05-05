@@ -13,7 +13,6 @@ from tpcollections import Database, Mapping, MappingOrder
 import json
 import marshal
 import pickle
-import orjson
 
 class TestExpiringDict(unittest.TestCase):
     def test_simple(self):

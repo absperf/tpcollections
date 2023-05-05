@@ -197,6 +197,15 @@ class Mapping(_db._Base, MutableMapping):
         if version != previous_version:
             self._version = version
 
+    def __len__(self) -> int:
+        '''Get the count of keys in the table.
+        '''
+
+        with self._connection.cursor() as cursor:
+            len, = cursor.execute(f'SELECT COUNT(*) FROM {self._table}').fetchone()
+            return len
+
+
     def __bool__(self) -> bool:
         '''Check if the table is not empty.'''
 
@@ -280,7 +289,7 @@ class Mapping(_db._Base, MutableMapping):
                         INSERT INTO {self._database}.{self._table} (key, value)
                             VALUES (?, ?)
                             ON CONFLICT (key) DO UPDATE
-                            SET value=excluded.valu
+                            SET value=excluded.value
                     ''',
                     (
                         self._key_serializer.dumps(key),

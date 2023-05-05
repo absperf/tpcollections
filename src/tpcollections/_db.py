@@ -178,7 +178,7 @@ _APPLICATION_ID = -1238962565
 
 _STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
 
-class Connection(MutableMapping):
+class Connection:
     '''The actual connection object, as a MutableMapping[str, Any].
 
     Items are expired when a value is inserted or updated.  Deletion or
@@ -248,6 +248,7 @@ class Connection(MutableMapping):
         else:
             new_transaction = _transaction(self._connection, self.read_only)
 
+        new_transaction.__enter__()
         self._transactions.append(new_transaction)
 
     def __exit__(
@@ -293,7 +294,13 @@ def _connect(
     timeout: float,
 ) -> Generator[Connection, None, None]:
     with (
-        closing(sqlite3.connect(uri, timeout=timeout)) as connection,
+        closing(sqlite3.connect(
+            uri,
+            timeout=timeout,
+            isolation_level=None,
+            check_same_thread=__debug__,
+            uri=True
+        )) as connection,
         closing(connection.cursor()) as cursor,
     ):
         try:
