@@ -31,8 +31,7 @@ try:
     )
     deterministic_orjson = Serializer(
         loads=_orjson.loads,
-        dumps=lambda value: _orjson.dumps(value, options=_orjson.OPT_SORT_KEYS).decode('utf-8'),
+        dumps=lambda value: _orjson.dumps(value, option=_orjson.OPT_SORT_KEYS).decode('utf-8'),
     )
 except ImportError:
     pass
-    

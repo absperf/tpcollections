@@ -21,12 +21,12 @@ from typing import Any, Generator, Iterable, Iterator, Optional, Reversible, Tup
 from weakref import finalize
 from enum import unique, Enum
 
-from tpcollections.util import Identifier
+from ._util import Identifier
 
-from . import db, serializers
+from . import _db, _serializers
 
 @unique
-class Order(str, Enum):
+class MappingOrder(str, Enum):
     '''An ordering enum for iteration methods.
     '''
 
@@ -39,7 +39,7 @@ class Order(str, Enum):
     def __format__(self, format_spec: str) -> str:
         return self.value.__format__(format_spec)
 
-class _Keys(Reversible, Iterable[str]):
+class _Keys(Reversible, Iterable[Any]):
     __slots__ = (
         '_connection',
         '_database',
@@ -50,11 +50,11 @@ class _Keys(Reversible, Iterable[str]):
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        connection: _db.Connection,
         database: Identifier,
         table: Identifier,
-        serializer: serializers.Serializer,
-        order: Order,
+        serializer: _serializers.Serializer,
+        order: MappingOrder,
     ) -> None:
 
         self._connection = connection
@@ -63,17 +63,17 @@ class _Keys(Reversible, Iterable[str]):
         self._serializer = serializer
         self._order = order
     
-    def _iterator(self, order: str) -> Iterator[str]:
-        with closing(self._connection.cursor()) as cursor:
-            for row in cursor.execute(
+    def _iterator(self, order: str) -> Iterator[Any]:
+        with self._connection.cursor() as cursor:
+            for key, in cursor.execute(
                 f'SELECT key FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
             ):
-                yield self._serializer.loads(row[0])
+                yield self._serializer.loads(key)
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[Any]:
         return self._iterator('ASC')
 
-    def __reversed__(self) -> Iterator[str]:
+    def __reversed__(self) -> Iterator[Any]:
         return self._iterator('DESC')
 
 class _Values(Reversible, Iterable[Any]):
@@ -87,11 +87,11 @@ class _Values(Reversible, Iterable[Any]):
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        connection: _db.Connection,
         database: Identifier,
         table: Identifier,
-        serializer: serializers.Serializer,
-        order: Order,
+        serializer: _serializers.Serializer,
+        order: MappingOrder,
     ) -> None:
 
         self._connection = connection
@@ -101,11 +101,11 @@ class _Values(Reversible, Iterable[Any]):
         self._order = order
 
     def _iterator(self, order: str) -> Iterator[Any]:
-        with closing(self._connection.cursor()) as cursor:
-            for row in cursor.execute(
+        with self._connection.cursor() as cursor:
+            for value, in cursor.execute(
                 f'SELECT value FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
             ):
-                yield self._serializer.loads(row[0])
+                yield self._serializer.loads(value)
 
     def __iter__(self) -> Iterator[Any]:
         return self._iterator('ASC')
@@ -113,7 +113,7 @@ class _Values(Reversible, Iterable[Any]):
     def __reversed__(self) -> Iterator[Any]:
         return self._iterator('DESC')
 
-class _Items(Reversible, Iterable[Tuple[str, Any]]):
+class _Items(Reversible, Iterable[Tuple[Any, Any]]):
     __slots__ = (
         '_connection',
         '_database',
@@ -125,12 +125,12 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        connection: _db.Connection,
         database: Identifier,
         table: Identifier,
-        key_serializer: serializers.Serializer,
-        value_serializer: serializers.Serializer,
-        order: Order,
+        key_serializer: _serializers.Serializer,
+        value_serializer: _serializers.Serializer,
+        order: MappingOrder,
     ) -> None:
         self._connection = connection
         self._database = database
@@ -139,24 +139,24 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
         self._value_serializer = value_serializer
         self._order = order
     
-    def _iterator(self, order: str) -> Iterator[Tuple[str, Any]]:
-        with closing(self._connection.cursor()) as cursor:
-            for row in cursor.execute(f'''
+    def _iterator(self, order: str) -> Iterator[Tuple[Any, Any]]:
+        with self._connection.cursor() as cursor:
+            for key, value in cursor.execute(f'''
                 SELECT key, value FROM {self._database}.{self._table}
                     ORDER BY {self._order} {order}
             '''):
                 yield (
-                    self._key_serializer.loads(row[0]),
-                    self._value_serializer.loads(row[1]),
+                    self._key_serializer.loads(key),
+                    self._value_serializer.loads(value),
                 )
 
-    def __iter__(self) -> Iterator[Tuple[str, Any]]:
+    def __iter__(self) -> Iterator[Tuple[Any, Any]]:
         return self._iterator('ASC')
 
-    def __reversed__(self) -> Iterator[Tuple[str, Any]]:
+    def __reversed__(self) -> Iterator[Tuple[Any, Any]]:
         return self._iterator('DESC')
 
-class Mapping(db.Base, MutableMapping):
+class Mapping(_db._Base, MutableMapping):
     '''A database mapping.
     '''
 
@@ -166,13 +166,14 @@ class Mapping(db.Base, MutableMapping):
     )
 
     def __init__(self,
-        connection: db.Connection,
-        database: Union[Identifier, str] = 'main',
-        table: Union[Identifier, str] = 'mapping',
-        key_serializer: serializers.Serializer = serializers.deterministic_json,
-        value_serializer: serializers.Serializer = serializers.pickle,
+        connection: _db.Connection,
+        database: str = 'main',
+        table: str = 'mapping',
+        key_serializer: _serializers.Serializer = _serializers.deterministic_json,
+        value_serializer: _serializers.Serializer = _serializers.pickle,
     ) -> None:
-        super().__init__(connection, database, table, 'mapping')
+
+        super().__init__(connection, Identifier(database), Identifier(table), 'mapping')
 
         self._key_serializer = key_serializer
         self._value_serializer = value_serializer
@@ -180,83 +181,63 @@ class Mapping(db.Base, MutableMapping):
         version = self._version
         previous_version = version
 
-        with closing(self._connection.connection.cursor()) as cursor:
-            if version < 1:
+        if version < 1:
+            with self._connection.cursor() as cursor:
                 cursor.execute(f'''
                     CREATE TABLE {self._database}.{self._table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        key {db.ANY} UNIQUE NOT NULL,
-                        value {db.ANY} NOT NULL) {db.STRICT}
+                        key {_db.ANY} UNIQUE NOT NULL,
+                        value {_db.ANY} NOT NULL) {_db.STRICT}
                 ''')
                 version = 1
 
-            if version > 1:
-                raise ValueError('tpcollections is not forward compatible')
+        if version > 1:
+            raise ValueError('tpcollections is not forward compatible')
 
-            if version != previous_version:
-                self._version = version
-
-            cursor.execute(
-                f'''
-                CREATE TRIGGER temp.{self._table + "_insert_trigger"}
-                    AFTER INSERT ON {self._database}.{self._table}
-                BEGIN
-                    DELETE FROM {self._database}.{self._table} WHERE expire <= {db.UNIXEPOCH};
-                END
-                '''
-            )
-
-            cursor.execute(
-                f'''
-                CREATE TRIGGER temp.{self._table + "_update_trigger"}
-                    AFTER UPDATE OF value ON {self._database}.{self._table}
-                BEGIN
-                    DELETE FROM {self._database}.{self._table} WHERE expire <= {db.UNIXEPOCH};
-                END
-                '''
-            )
+        if version != previous_version:
+            self._version = version
 
     def __bool__(self) -> bool:
         '''Check if the table is not empty.'''
 
         return len(self) > 0
 
-    def keys(self, order: Order = Order.ID) -> _Keys:
+    def keys(self, order: MappingOrder = MappingOrder.ID) -> Reversible[Any]:
         '''Iterate over keys in the table.
         '''
 
         return _Keys(
-            connection=self._connection.connection,
+            connection=self._connection,
             database=self._database,
             table=self._table,
             serializer=self._key_serializer,
             order=order,
         )
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[Any]:
         return iter(self.keys())
 
-    def __reversed__(self) -> Iterator[str]:
+    def __reversed__(self) -> Iterator[Any]:
         return reversed(self.keys())
 
-    def values(self, order: Order = Order.ID) -> _Values:
+    def values(self, order: MappingOrder = MappingOrder.ID) -> Reversible[Any]:
         '''Iterate over values in the table.
         '''
 
         return _Values(
-            connection=self._connection.connection,
+            connection=self._connection,
             database=self._database,
             table=self._table,
             serializer=self._value_serializer,
             order=order,
         )
 
-    def items(self, order: Order = Order.ID) -> _Items:
+    def items(self, order: MappingOrder = MappingOrder.ID) -> Reversible[Tuple[Any, Any]]:
         '''Iterate over keys and values in the table.
         '''
 
         return _Items(
-            connection=self._connection.connection,
+            connection=self._connection,
             database=self._database,
             table=self._table,
             key_serializer=self._key_serializer,
@@ -268,7 +249,7 @@ class Mapping(db.Base, MutableMapping):
         '''Check if the table contains the given key.
         '''
 
-        with closing(self._connection.connection.cursor()) as cursor:
+        with self._connection.cursor() as cursor:
             cursor.execute(
                 f'SELECT 1 FROM {self._database}.{self._table} WHERE key = ?',
                 (self._key_serializer.dumps(key),),
@@ -279,7 +260,7 @@ class Mapping(db.Base, MutableMapping):
         '''Fetch the key.
         '''
 
-        with closing(self._connection.connection.cursor()) as cursor:
+        with self._connection.cursor() as cursor:
             for row in cursor.execute(
                 f'SELECT value FROM {self._database}.{self._table} WHERE key = ?',
                 (self._key_serializer.dumps(key),),
@@ -293,7 +274,7 @@ class Mapping(db.Base, MutableMapping):
         This also triggers cleaning up expired values.
         '''
 
-        with closing(self._connection.connection.cursor()) as cursor:
+        with self._connection.cursor() as cursor:
             if sqlite3.sqlite_version_info >= (3, 24):
                 cursor.execute(f'''
                         INSERT INTO {self._database}.{self._table} (key, value)
@@ -332,7 +313,7 @@ class Mapping(db.Base, MutableMapping):
         '''Delete an item from the table.
         '''
 
-        with closing(self._connection.connection.cursor()) as cursor:
+        with self._connection.cursor() as cursor:
             cursor.execute(
                 f'DELETE FROM {self._database}.{self._table} WHERE key=?',
                 (self._key_serializer.dumps(key),),
@@ -344,5 +325,5 @@ class Mapping(db.Base, MutableMapping):
         '''Delete all items from the table.
         '''
 
-        with closing(self._connection.connection.cursor()) as cursor:
+        with self._connection.cursor() as cursor:
             cursor.execute(f'DELETE FROM {self._database}.{self._table}')

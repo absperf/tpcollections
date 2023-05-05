@@ -12,11 +12,12 @@ from types import TracebackType
 from typing import Any, ContextManager, Generator, Iterable, Iterator, List, Optional, Reversible, Set, Tuple, Type, Union
 from weakref import finalize
 from enum import auto, unique, Enum
+import warnings
 
-from tpcollections.util import Identifier
+from ._util import Identifier
 
 @contextmanager
-def savepoint(
+def _savepoint(
     connection: sqlite3.Connection,
     name: Identifier | str = Identifier('tpcollection'),
 ) -> Generator[None, None, None]:
@@ -34,7 +35,7 @@ def savepoint(
             cursor.execute(f'RELEASE {name}')
 
 @contextmanager
-def transaction(
+def _transaction(
     connection: sqlite3.Connection,
     read_only: bool = False,
 ) -> Generator[None, None, None]:
@@ -70,27 +71,6 @@ class Mode(Enum):
     # at all.
     IMMUTABLE = auto()
 
-@contextmanager
-def _connect(
-    uri: str,
-    mode: Mode,
-    wal: bool,
-    timeout: float,
-) -> Generator[sqlite3.Connection, None, None]:
-    with (
-        closing(sqlite3.connect(uri, timeout=timeout)) as connection,
-        closing(connection.cursor()) as cursor,
-    ):
-        try:
-            if wal and mode is Mode.READ_WRITE:
-                cursor.execute('PRAGMA main.journal_mode=WAL')
-                cursor.execute('PRAGMA main.synchronous=NORMAL')
-
-            yield connection
-        finally:
-            if mode is Mode.READ_WRITE:
-                cursor.execute('PRAGMA analysis_limit=8192')
-                cursor.execute('PRAGMA optimize')
 def _uri(
     path: Optional[Path] = None,
     mode: Mode = Mode.READ_WRITE,
@@ -126,6 +106,8 @@ class Database:
         '_uri',
         '_mode',
         '_connection',
+        '_timeout',
+        '_wal',
         '__weakref__'
     )
 
@@ -142,17 +124,20 @@ class Database:
 
         self._mode = mode
         self._uri = _uri(path, mode)
+        self._wal = wal
+        self._timeout = timeout
 
     @property
     def read_only(self) -> bool:
         return self._mode is not Mode.READ_WRITE
 
     def __call__(self) -> ContextManager['Connection']:
-        @contextmanager
-        def connect() -> Generator['Connection', None, None]:
-            with (
         return _connect(
             self._uri,
+            self._mode,
+            self._wal,
+            self._timeout,
+        )
 
     def __enter__(self) -> 'Connection':
         assert not hasattr(self, '_connection'), (
@@ -189,9 +174,9 @@ if sqlite3.sqlite_version_info >= (3, 38):
 else:
     UNIXEPOCH = "CAST(strftime('%s', 'now') AS INTEGER)"
 
-APPLICATION_ID = -1238962565
+_APPLICATION_ID = -1238962565
 
-STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
+_STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
 
 class Connection(MutableMapping):
     '''The actual connection object, as a MutableMapping[str, Any].
@@ -204,34 +189,64 @@ class Connection(MutableMapping):
         '_connection',
         '_attachments',
         '_mode',
-        '_read_only',
         '_transactions',
+        '_wal',
         '__weakref__',
     )
 
     def __init__(self,
         connection: sqlite3.Connection,
         mode: Mode,
+        wal: bool,
     ) -> None:
         self._connection = connection
         self._attachments: Set[str] = {'main'}
         self._mode = mode
-        self._read_only = read_only
         self._transactions: List[ContextManager[None]] = []
+        self._wal = wal
+        self._init(Identifier('main'))
+
+    def _init(self, database: Identifier) -> None:
+        with self.cursor() as cursor:
+            application_id = next(cursor.execute('PRAGMA application_id'))[0]
+            if application_id == 0:
+                cursor.execute(f'PRAGMA application_id = {_APPLICATION_ID}')
+            elif application_id != _APPLICATION_ID:
+                raise ValueError(f'illegal application ID {application_id}')
+
+            user_version = next(cursor.execute('PRAGMA user_version'))[0]
+            if user_version == 0:
+                cursor.execute(f'PRAGMA user_version = 1')
+            elif user_version != 1:
+                raise ValueError(f'user_version was {user_version}')
+
+            if not self.read_only:
+                cursor.execute(f'''
+                    CREATE TABLE IF NOT EXISTS main.tpcollections (
+                        name TEXT PRIMARY KEY NOT NULL,
+                        type TEXT NOT NULL,
+                        version INTEGER NOT NULL
+                    ) {_STRICT_WITHOUT_ROWID}
+                ''')
 
     @property
     def connection(self) -> sqlite3.Connection:
         return self._connection
 
+    @contextmanager
+    def cursor(self) -> Generator[sqlite3.Cursor, None, None]:
+        with closing(self._connection.cursor()) as cursor:
+            yield cursor
+
     @property
     def read_only(self) -> bool:
-        return self._read_only
+        return self._mode is not Mode.READ_WRITE
 
     def __enter__(self) -> None:
         if self._transactions:
-            new_transaction = savepoint(self._connection)
+            new_transaction = _savepoint(self._connection)
         else:
-            new_transaction = transaction(self._connection, self._read_only)
+            new_transaction = _transaction(self._connection, self.read_only)
 
         self._transactions.append(new_transaction)
 
@@ -242,21 +257,57 @@ class Connection(MutableMapping):
         traceback: Optional[TracebackType],
     ) -> Optional[bool]:
         return self._transactions.pop().__exit__(type, value, traceback)
+
     def attach(
         self,
+        database: str,
         path: Optional[Path] = None,
-        name: Identifier,
-        read_only: bool,
-        wal: bool,
     ) -> None:
-        with closing(connection.cursor()) as cursor:
-            cursor.execute(f'ATTACH ? AS {name}', (uri,))
-            if wal and not read_only:
-                cursor.execute(f'PRAGMA {name}.journal_mode=WAL')
-                cursor.execute(f'PRAGMA {name}.synchronous=NORMAL')
+        uri = _uri(path, self._mode)
+        database_id = Identifier(database)
 
+        with closing(self._connection.cursor()) as cursor:
+            if __debug__ and self._transactions:
+                warnings.warn(
+                    'Attaching a database inside a transaction can prevent '
+                    'transactions from being atomic.'
+                )
+            cursor.execute(f'ATTACH ? AS {database_id}', (uri,))
+            if self._wal and not self.read_only:
+                if __debug__:
+                    warnings.warn(
+                        'Attaching a database in wal mode can cause'
+                        ' non-atomic transactions:'
+                        ' https://www.sqlite.org/lang_attach.html'
+                    )
+                cursor.execute(f'PRAGMA {database_id}.journal_mode=WAL')
+                cursor.execute(f'PRAGMA {database_id}.synchronous=NORMAL')
 
-class Base:
+        self._init(database_id)
+
+@contextmanager
+def _connect(
+    uri: str,
+    mode: Mode,
+    wal: bool,
+    timeout: float,
+) -> Generator[Connection, None, None]:
+    with (
+        closing(sqlite3.connect(uri, timeout=timeout)) as connection,
+        closing(connection.cursor()) as cursor,
+    ):
+        try:
+            if wal and mode is Mode.READ_WRITE:
+                cursor.execute('PRAGMA main.journal_mode=WAL')
+                cursor.execute('PRAGMA main.synchronous=NORMAL')
+
+            yield Connection(connection, mode, wal)
+        finally:
+            if mode is Mode.READ_WRITE:
+                cursor.execute('PRAGMA analysis_limit=8192')
+                cursor.execute('PRAGMA optimize')
+
+class _Base:
     __slots__ = (
         '_connection',
         '_database',
@@ -266,39 +317,15 @@ class Base:
     def __init__(
         self,
         connection: Connection,
-        database: Union[Identifier, str],
-        table: Union[Identifier, str],
+        database: Identifier,
+        table: Identifier,
         type: str,
     ) -> None:
         self._connection = connection
-        if isinstance(database, str):
-            database = Identifier(database)
         self._database = database
-        if isinstance(table, str):
-            table = Identifier(table)
         self._table = table
 
         with closing(connection.connection.cursor()) as cursor:
-            application_id = next(cursor.execute('PRAGMA application_id'))[0]
-            if application_id == 0:
-                cursor.execute(f'PRAGMA application_id = {APPLICATION_ID}')
-            elif application_id != APPLICATION_ID:
-                raise ValueError(f'illegal application ID {application_id}')
-
-            user_version = next(cursor.execute('PRAGMA user_version'))[0]
-            if user_version == 0:
-                cursor.execute(f'PRAGMA user_version = 1')
-            elif user_version != 1:
-                raise ValueError(f'user_version was {user_version}')
-
-            if not connection.read_only:
-                cursor.execute(f'''
-                    CREATE TABLE IF NOT EXISTS {database}.tpcollections (
-                        name TEXT PRIMARY KEY NOT NULL,
-                        type TEXT NOT NULL,
-                        version INTEGER NOT NULL
-                    ) {STRICT_WITHOUT_ROWID}
-                ''')
             cursor.execute(f'''
                 SELECT type
                     FROM {database}.tpcollections
@@ -325,12 +352,12 @@ class Base:
                     raise ValueError(f'Tried to open {database}.{table}'
                         f' as {type}, but it already existed as {existing_type}')
     @property
-    def database(self) -> Identifier:
-        return self._database
+    def database(self) -> str:
+        return self._database.value
 
     @property
-    def table(self) -> Identifier:
-        return self._table
+    def table(self) -> str:
+        return self._table.value
 
     @property
     def _version(self) -> int:
