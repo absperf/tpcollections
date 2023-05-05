@@ -43,26 +43,29 @@ class _Keys(Reversible, Iterable[str]):
     __slots__ = (
         '_connection',
         '_table',
+        '_serializer',
         '_order',
     )
 
     def __init__(
         self,
         connection: sqlite3.Connection,
-        table: str,
+        table: Identifier,
+        serializer: serializers.Serializer,
         order: Order,
     ) -> None:
 
         self._connection = connection
         self._table = table
+        self._serializer = serializer
         self._order = order
     
     def _iterator(self, order: str) -> Iterator[str]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(
-                f'SELECT key FROM "{self._table}" ORDER BY {self._order} {order}',
+                f'SELECT key FROM {self._table} ORDER BY {self._order} {order}',
             ):
-                yield row[0]
+                yield self._serializer.loads(row[0])
 
     def __iter__(self) -> Iterator[str]:
         return self._iterator('ASC')
@@ -81,8 +84,8 @@ class _Values(Reversible, Iterable[Any]):
     def __init__(
         self,
         connection: sqlite3.Connection,
-        table: str,
-        serializer: Any,
+        table: Identifier,
+        serializer: serializers.Serializer,
         order: Order,
     ) -> None:
 
@@ -94,7 +97,7 @@ class _Values(Reversible, Iterable[Any]):
     def _iterator(self, order: str) -> Iterator[Any]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(
-                f'SELECT value FROM "{self._table}" ORDER BY {self._order} {order}',
+                f'SELECT value FROM {self._table} ORDER BY {self._order} {order}',
             ):
                 yield self._serializer.loads(row[0])
 
@@ -108,29 +111,35 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
     __slots__ = (
         '_connection',
         '_table',
-        '_serializer',
+        '_key_serializer',
+        '_value_serializer',
         '_order',
     )
 
     def __init__(
         self,
         connection: sqlite3.Connection,
-        table: str,
-        serializer: Any,
+        table: Identifier,
+        key_serializer: serializers.Serializer,
+        value_serializer: serializers.Serializer,
         order: Order,
     ) -> None:
         self._connection = connection
         self._table = table
-        self._serializer = serializer
+        self._key_serializer = key_serializer
+        self._value_serializer = value_serializer
         self._order = order
     
     def _iterator(self, order: str) -> Iterator[Tuple[str, Any]]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(f'''
-                SELECT key, value FROM "{self._table}"
+                SELECT key, value FROM {self._table}
                     ORDER BY {self._order} {order}
             '''):
-                yield row[0], self._serializer.loads(row[1])
+                yield (
+                    self._key_serializer.loads(row[0]),
+                    self._value_serializer.loads(row[1]),
+                )
 
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
         return self._iterator('ASC')
@@ -159,111 +168,44 @@ class Mapping(db.Base, MutableMapping):
         self._key_serializer = key_serializer
         self._value_serializer = value_serializer
 
-            user_version = next(cursor.execute('PRAGMA user_version'))[0]
+        version = self._version
+        previous_version = version
 
-            if user_version < 1:
-                # Attempt to migrate, because of pre-6.1 versions.  We can't
-                # otherwise tell the difference between a fresh database and a
-                # pre-set one.
-                cursor.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                    (self._table,),
-                )
-                migrate = bool(cursor.fetchall())
-
-                if migrate:
-                    cursor.execute(f'''
-                        DROP INDEX IF EXISTS "{self._safe_table}_expire_index"
-                    ''')
-                    cursor.execute(f'''
-                        DROP TRIGGER IF EXISTS "{self._safe_table}_insert_trigger"
-                    ''')
-                    cursor.execute(f'''
-                        DROP TRIGGER IF EXISTS "{self._safe_table}_update_trigger"
-                    ''')
-                    cursor.execute(f'''
-                        ALTER TABLE "{self._safe_table}"
-                        RENAME TO "{self._safe_table}_v0"
-                    ''')
-
-
+        with closing(self._connection.connection.cursor()) as cursor:
+            if version < 1:
                 cursor.execute(f'''
-                    CREATE TABLE "{self._safe_table}" (
+                    CREATE TABLE {self._table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        key TEXT UNIQUE NOT NULL,
-                        expire INTEGER NOT NULL,
-                        value {_valuetype} NOT NULL){_trailer}
+                        key {db.ANY} UNIQUE NOT NULL,
+                        value {db.ANY} NOT NULL) {db.STRICT}
                 ''')
+                version = 1
 
-                cursor.execute(f'''
-                    CREATE INDEX "{self._safe_table}_expire_index"
-                     ON "{self._safe_table}" (expire)
-                ''')
+            if version > 1:
+                raise ValueError('tpcollections is not forward compatible')
 
-                cursor.execute(
-                    f'''
-                    CREATE TRIGGER "{self._safe_table}_insert_trigger"
-                        AFTER INSERT ON "{self._safe_table}"
-                    BEGIN
-                        DELETE FROM "{self._safe_table}" WHERE expire <= {_unixepoch};
-                    END
-                    '''
-                )
+            if version != previous_version:
+                self._version = version
 
-                cursor.execute(
-                    f'''
-                    CREATE TRIGGER "{self._safe_table}_update_trigger"
-                        AFTER UPDATE OF value ON "{self._safe_table}"
-                    BEGIN
-                        DELETE FROM "{self._safe_table}" WHERE expire <= {_unixepoch};
-                    END
-                    '''
-                )
+            cursor.execute(
+                f'''
+                CREATE TRIGGER temp.{self._table + "_insert_trigger"}
+                    AFTER INSERT ON {self._table}
+                BEGIN
+                    DELETE FROM {self._table} WHERE expire <= {db.UNIXEPOCH};
+                END
+                '''
+            )
 
-                if migrate:
-                    cursor.execute(f'''
-                        INSERT INTO "{self._safe_table}"
-                            (key, expire, value)
-                        SELECT key, expire, value
-                            FROM "{self._safe_table}_v0"
-                    ''')
-                    cursor.execute(f'DROP TABLE "{self._safe_table}_v0"')
-
-                cursor.execute('PRAGMA user_version = 1')
-
-                user_version = 1
-
-            if user_version > 1:
-                raise ValueError(
-                    'this version of tpcollections is not'
-                    ' compatible with this schema version'
-                )
-    @property
-    def connection(self) -> sqlite3.Connection:
-        return self._connection
-
-    @property
-    def lifespan(self) -> timedelta:
-        '''The current lifespan.
-
-        Changing this will change the calculated expiration time of future set
-        items.  It will not retroactively apply to existing items unless you explicitly
-        postpone them.
-        '''
-        return timedelta(seconds=self._lifespan)
-
-    @lifespan.setter
-    def lifespan(self, value: timedelta) -> None:
-        self._lifespan = value.total_seconds()
-
-    def __len__(self) -> int:
-        '''Get the count of keys in the table.
-        '''
-
-        with closing(self._connection.cursor()) as cursor:
-            for row in cursor.execute(f'SELECT COUNT(*) FROM "{self._safe_table}"'):
-                return row[0]
-        return 0
+            cursor.execute(
+                f'''
+                CREATE TRIGGER temp.{self._table + "_update_trigger"}
+                    AFTER UPDATE OF value ON {self._table}
+                BEGIN
+                    DELETE FROM {self._table} WHERE expire <= {db.UNIXEPOCH};
+                END
+                '''
+            )
 
     def __bool__(self) -> bool:
         '''Check if the table is not empty.'''
@@ -275,8 +217,9 @@ class Mapping(db.Base, MutableMapping):
         '''
 
         return _Keys(
-            connection=self._connection,
-            table=self._safe_table,
+            connection=self._connection.connection,
+            table=self._table,
+            serializer=self._key_serializer,
             order=order,
         )
 
@@ -291,9 +234,9 @@ class Mapping(db.Base, MutableMapping):
         '''
 
         return _Values(
-            connection=self._connection,
-            table=self._safe_table,
-            serializer=self._serializer,
+            connection=self._connection.connection,
+            table=self._table,
+            serializer=self._value_serializer,
             order=order,
         )
 
@@ -302,9 +245,10 @@ class Mapping(db.Base, MutableMapping):
         '''
 
         return _Items(
-            connection=self._connection,
-            table=self._safe_table,
-            serializer=self._serializer,
+            connection=self._connection.connection,
+            table=self._table,
+            key_serializer=self._key_serializer,
+            value_serializer=self._value_serializer,
             order=order,
         )
 

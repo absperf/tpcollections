@@ -267,6 +267,8 @@ class Base:
             user_version = next(cursor.execute('PRAGMA user_version'))[0]
             if user_version == 0:
                 cursor.execute(f'PRAGMA user_version = 1')
+            elif user_version != 1:
+                raise ValueError(f'user_version was {user_version}')
 
             if not connection.read_only:
                 cursor.execute(f'''
@@ -283,6 +285,13 @@ class Base:
             ''', (table.value,))
             row = cursor.fetchone()
             if row is None:
+                cursor.execute(
+                    'SELECT 1 FROM sqlite_master WHERE name = ?',
+                    (table.value,)
+                )
+                if cursor.fetchone() is not None:
+                    raise NameError(f'table {table} already exists')
+                
                 cursor.execute(f'''
                     INSERT INTO {database}.tpcollections 
                         (name, type, version)
@@ -292,7 +301,7 @@ class Base:
                 existing_type, = row
 
                 if type != existing_type:
-                    raise ValueError(f'Tried to open {database}.{table.value}'
+                    raise ValueError(f'Tried to open {database}.{table}'
                         f' as {type}, but it already existed as {existing_type}')
     @property
     def database(self) -> Identifier:
@@ -301,3 +310,25 @@ class Base:
     @property
     def table(self) -> Identifier:
         return self._table
+
+    @property
+    def _version(self) -> int:
+        with closing(self._connection.connection.cursor()) as cursor:
+            cursor.execute(f'''
+                SELECT version
+                    FROM {self._database}.tpcollections
+                    WHERE name = ?
+            ''', (self._table.value,))
+            version, = cursor.fetchone()
+            return version
+
+    @_version.setter
+    def _version(self, value: int) -> None:
+        assert not self._connection.read_only
+        with closing(self._connection.connection.cursor()) as cursor:
+            cursor.execute(f'''
+                UPDATE {self._database}.tpcollections
+                    SET version = ?
+                    WHERE name = ?
+            ''', (value, self._table.value))
+
