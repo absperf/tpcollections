@@ -73,25 +73,42 @@ class Mode(Enum):
 @contextmanager
 def _connect(
     uri: str,
-    read_only: bool,
+    mode: Mode,
     wal: bool,
     timeout: float,
 ) -> Generator[sqlite3.Connection, None, None]:
     with (
-        closing(sqlite3.connect(uri, )) as connection,
+        closing(sqlite3.connect(uri, timeout=timeout)) as connection,
         closing(connection.cursor()) as cursor,
     ):
         try:
-            if wal and not read_only:
-                cursor.execute('PRAGMA journal_mode=WAL')
-                cursor.execute('PRAGMA synchronous=NORMAL')
+            if wal and mode is Mode.READ_WRITE:
+                cursor.execute('PRAGMA main.journal_mode=WAL')
+                cursor.execute('PRAGMA main.synchronous=NORMAL')
 
             yield connection
         finally:
-            if not read_only:
+            if mode is Mode.READ_WRITE:
                 cursor.execute('PRAGMA analysis_limit=8192')
                 cursor.execute('PRAGMA optimize')
+def _uri(
+    path: Optional[Path] = None,
+    mode: Mode = Mode.READ_WRITE,
+) -> str:
+    if path is None:
+        return ':memory:'
+    else:
+        if path.is_absolute():
+            uri = path.as_uri()
+        else:
+            uri = 'file:' + str(path)
 
+        if mode is Mode.READ_ONLY:
+            uri += '?mode=ro'
+        elif mode is Mode.IMMUTABLE:
+            uri += '?immutable=1'
+
+        return uri
 
 class Database:
     """
@@ -107,7 +124,7 @@ class Database:
 
     __slots__ = (
         '_uri',
-        '_read_only',
+        '_mode',
         '_connection',
         '__weakref__'
     )
@@ -123,30 +140,19 @@ class Database:
             'An in-memory database must be read-write'
         )
 
-        if path is None:
-            self._uri = ':memory:'
-            self._read_only = False
-        else:
-            if path.is_absolute():
-                uri = path.as_uri()
-            else:
-                uri = 'file:' + str(path)
-
-            self._read_only = mode is not Mode.READ_WRITE
-
-            if mode is Mode.READ_ONLY:
-                uri += '?mode=ro'
-            elif mode is Mode.IMMUTABLE:
-                uri += '?immutable=1'
-
-            self._uri = uri
+        self._mode = mode
+        self._uri = _uri(path, mode)
 
     @property
     def read_only(self) -> bool:
-        return self._read_only
+        return self._mode is not Mode.READ_WRITE
 
     def __call__(self) -> ContextManager['Connection']:
-        raise NotImplementedError
+        @contextmanager
+        def connect() -> Generator['Connection', None, None]:
+            with (
+        return _connect(
+            self._uri,
 
     def __enter__(self) -> 'Connection':
         assert not hasattr(self, '_connection'), (
@@ -197,6 +203,7 @@ class Connection(MutableMapping):
     __slots__ = (
         '_connection',
         '_attachments',
+        '_mode',
         '_read_only',
         '_transactions',
         '__weakref__',
@@ -204,10 +211,11 @@ class Connection(MutableMapping):
 
     def __init__(self,
         connection: sqlite3.Connection,
-        read_only: bool,
+        mode: Mode,
     ) -> None:
         self._connection = connection
         self._attachments: Set[str] = {'main'}
+        self._mode = mode
         self._read_only = read_only
         self._transactions: List[ContextManager[None]] = []
 
@@ -234,6 +242,19 @@ class Connection(MutableMapping):
         traceback: Optional[TracebackType],
     ) -> Optional[bool]:
         return self._transactions.pop().__exit__(type, value, traceback)
+    def attach(
+        self,
+        path: Optional[Path] = None,
+        name: Identifier,
+        read_only: bool,
+        wal: bool,
+    ) -> None:
+        with closing(connection.cursor()) as cursor:
+            cursor.execute(f'ATTACH ? AS {name}', (uri,))
+            if wal and not read_only:
+                cursor.execute(f'PRAGMA {name}.journal_mode=WAL')
+                cursor.execute(f'PRAGMA {name}.synchronous=NORMAL')
+
 
 class Base:
     __slots__ = (

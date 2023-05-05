@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 
 class Identifier:
     '''An auto-escaping identifier similar to a string.
@@ -7,13 +7,17 @@ class Identifier:
     '''
     __slots__ = (
         '__value',
+        '__safe',
     )
 
     def __init__(self, value: Union['Identifier', str] = "") -> None:
+        self.__safe: Optional[str]
         if isinstance(value, Identifier):
-            value = value.value
-
-        self.__value = value
+            self.__value = value.__value
+            self.__safe = value.__safe
+        else:
+            self.__value = value
+            self.__safe = None
 
     @property
     def value(self) -> str:
@@ -41,7 +45,10 @@ class Identifier:
         return f'<Identifier {self.__value!r}>'
 
     def __str__(self) -> str:
-        if b'\x00' in self.__value.encode('utf-8'):
-            raise ValueError("sqlite Identifer must not contain any null bytes")
+        if self.__safe is None:
+            if b'\x00' in self.__value.encode('utf-8'):
+                raise ValueError("sqlite Identifer must not contain any null bytes")
 
-        return '"' + self.__value.replace('"', '""') + '"'
+            self.__safe = '"' + self.__value.replace('"', '""') + '"'
+
+        return self.__safe

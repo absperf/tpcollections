@@ -42,6 +42,7 @@ class Order(str, Enum):
 class _Keys(Reversible, Iterable[str]):
     __slots__ = (
         '_connection',
+        '_database',
         '_table',
         '_serializer',
         '_order',
@@ -50,12 +51,14 @@ class _Keys(Reversible, Iterable[str]):
     def __init__(
         self,
         connection: sqlite3.Connection,
+        database: Identifier,
         table: Identifier,
         serializer: serializers.Serializer,
         order: Order,
     ) -> None:
 
         self._connection = connection
+        self._database = database
         self._table = table
         self._serializer = serializer
         self._order = order
@@ -63,7 +66,7 @@ class _Keys(Reversible, Iterable[str]):
     def _iterator(self, order: str) -> Iterator[str]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(
-                f'SELECT key FROM {self._table} ORDER BY {self._order} {order}',
+                f'SELECT key FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
             ):
                 yield self._serializer.loads(row[0])
 
@@ -76,6 +79,7 @@ class _Keys(Reversible, Iterable[str]):
 class _Values(Reversible, Iterable[Any]):
     __slots__ = (
         '_connection',
+        '_database',
         '_table',
         '_serializer',
         '_order',
@@ -84,12 +88,14 @@ class _Values(Reversible, Iterable[Any]):
     def __init__(
         self,
         connection: sqlite3.Connection,
+        database: Identifier,
         table: Identifier,
         serializer: serializers.Serializer,
         order: Order,
     ) -> None:
 
         self._connection = connection
+        self._database = database
         self._table = table
         self._serializer = serializer
         self._order = order
@@ -97,7 +103,7 @@ class _Values(Reversible, Iterable[Any]):
     def _iterator(self, order: str) -> Iterator[Any]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(
-                f'SELECT value FROM {self._table} ORDER BY {self._order} {order}',
+                f'SELECT value FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
             ):
                 yield self._serializer.loads(row[0])
 
@@ -110,6 +116,7 @@ class _Values(Reversible, Iterable[Any]):
 class _Items(Reversible, Iterable[Tuple[str, Any]]):
     __slots__ = (
         '_connection',
+        '_database',
         '_table',
         '_key_serializer',
         '_value_serializer',
@@ -119,12 +126,14 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
     def __init__(
         self,
         connection: sqlite3.Connection,
+        database: Identifier,
         table: Identifier,
         key_serializer: serializers.Serializer,
         value_serializer: serializers.Serializer,
         order: Order,
     ) -> None:
         self._connection = connection
+        self._database = database
         self._table = table
         self._key_serializer = key_serializer
         self._value_serializer = value_serializer
@@ -133,7 +142,7 @@ class _Items(Reversible, Iterable[Tuple[str, Any]]):
     def _iterator(self, order: str) -> Iterator[Tuple[str, Any]]:
         with closing(self._connection.cursor()) as cursor:
             for row in cursor.execute(f'''
-                SELECT key, value FROM {self._table}
+                SELECT key, value FROM {self._database}.{self._table}
                     ORDER BY {self._order} {order}
             '''):
                 yield (
@@ -174,7 +183,7 @@ class Mapping(db.Base, MutableMapping):
         with closing(self._connection.connection.cursor()) as cursor:
             if version < 1:
                 cursor.execute(f'''
-                    CREATE TABLE {self._table} (
+                    CREATE TABLE {self._database}.{self._table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                         key {db.ANY} UNIQUE NOT NULL,
                         value {db.ANY} NOT NULL) {db.STRICT}
@@ -190,9 +199,9 @@ class Mapping(db.Base, MutableMapping):
             cursor.execute(
                 f'''
                 CREATE TRIGGER temp.{self._table + "_insert_trigger"}
-                    AFTER INSERT ON {self._table}
+                    AFTER INSERT ON {self._database}.{self._table}
                 BEGIN
-                    DELETE FROM {self._table} WHERE expire <= {db.UNIXEPOCH};
+                    DELETE FROM {self._database}.{self._table} WHERE expire <= {db.UNIXEPOCH};
                 END
                 '''
             )
@@ -200,9 +209,9 @@ class Mapping(db.Base, MutableMapping):
             cursor.execute(
                 f'''
                 CREATE TRIGGER temp.{self._table + "_update_trigger"}
-                    AFTER UPDATE OF value ON {self._table}
+                    AFTER UPDATE OF value ON {self._database}.{self._table}
                 BEGIN
-                    DELETE FROM {self._table} WHERE expire <= {db.UNIXEPOCH};
+                    DELETE FROM {self._database}.{self._table} WHERE expire <= {db.UNIXEPOCH};
                 END
                 '''
             )
@@ -218,6 +227,7 @@ class Mapping(db.Base, MutableMapping):
 
         return _Keys(
             connection=self._connection.connection,
+            database=self._database,
             table=self._table,
             serializer=self._key_serializer,
             order=order,
@@ -235,6 +245,7 @@ class Mapping(db.Base, MutableMapping):
 
         return _Values(
             connection=self._connection.connection,
+            database=self._database,
             table=self._table,
             serializer=self._value_serializer,
             order=order,
@@ -246,33 +257,34 @@ class Mapping(db.Base, MutableMapping):
 
         return _Items(
             connection=self._connection.connection,
+            database=self._database,
             table=self._table,
             key_serializer=self._key_serializer,
             value_serializer=self._value_serializer,
             order=order,
         )
 
-    def __contains__(self, key: str) -> bool:
+    def __contains__(self, key: Any) -> bool:
         '''Check if the table contains the given key.
         '''
 
-        with closing(self._connection.cursor()) as cursor:
-            for _ in cursor.execute(
-                f'SELECT 1 FROM "{self._safe_table}" WHERE key = ?',
-                (key,),
-            ):
-                return True
-        return False
+        with closing(self._connection.connection.cursor()) as cursor:
+            cursor.execute(
+                f'SELECT 1 FROM {self._database}.{self._table} WHERE key = ?',
+                (self._key_serializer.dumps(key),),
+            )
+            return cursor.fetchone() is not None
 
     def __getitem__(self, key: str) -> Any:
         '''Fetch the key.
         '''
 
-        with closing(self._connection.cursor()) as cursor:
+        with closing(self._connection.connection.cursor()) as cursor:
             for row in cursor.execute(
-                f'SELECT value FROM "{self._safe_table}" WHERE key = ?', (key,)
+                f'SELECT value FROM {self._database}.{self._table} WHERE key = ?',
+                (self._key_serializer.dumps(key),),
             ):
-                return self._serializer.loads(row[0])
+                return self._value_serializer.loads(row[0])
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
@@ -281,39 +293,50 @@ class Mapping(db.Base, MutableMapping):
         This also triggers cleaning up expired values.
         '''
 
-        with closing(self._connection.cursor()) as cursor:
+        with closing(self._connection.connection.cursor()) as cursor:
             if sqlite3.sqlite_version_info >= (3, 24):
                 cursor.execute(f'''
-                        INSERT INTO "{self._safe_table}" (key, expire, value)
-                            VALUES (?, {_unixepoch} + ?, ?)
+                        INSERT INTO {self._database}.{self._table} (key, value)
+                            VALUES (?, ?)
                             ON CONFLICT (key) DO UPDATE
-                            SET value=excluded.value, expire=excluded.expire
+                            SET value=excluded.valu
                     ''',
-                    (key, self._lifespan, self._serializer.dumps(value)),
+                    (
+                        self._key_serializer.dumps(key),
+                        self._value_serializer.dumps(value),
+                    ),
                 )
             elif key in self:
                 cursor.execute(f'''
-                        UPDATE "{self._safe_table}"
-                            SET expire={_unixepoch} + ?,
-                                value=?
-                            WHERE key=?
+                        UPDATE {self._database}.{self._table}
+                            SET value=?2
+                            WHERE key=?1
                     ''',
-                    (self._lifespan, self._serializer.dumps(value), key),
+                    (
+                        self._key_serializer.dumps(key),
+                        self._value_serializer.dumps(value),
+                    ),
                 )
             else:
                 cursor.execute(f'''
-                        INSERT INTO "{self._safe_table}" (key, expire, value)
-                            VALUES (?, {_unixepoch} + ?, ?)
+                        INSERT INTO {self._database}.{self._table} (key, value)
+                            VALUES (?, ?)
                     ''',
-                    (key, self._lifespan, self._serializer.dumps(value)),
+                    (
+                        self._key_serializer.dumps(key),
+                        self._value_serializer.dumps(value),
+                    ),
                 )
 
     def __delitem__(self, key: str) -> None:
         '''Delete an item from the table.
         '''
 
-        with closing(self._connection.cursor()) as cursor:
-            cursor.execute(f'DELETE FROM "{self._safe_table}" WHERE key=?', (key,))
+        with closing(self._connection.connection.cursor()) as cursor:
+            cursor.execute(
+                f'DELETE FROM {self._database}.{self._table} WHERE key=?',
+                (self._key_serializer.dumps(key),),
+            )
             if cursor.rowcount != 1:
                 raise KeyError(key)
 
@@ -321,23 +344,5 @@ class Mapping(db.Base, MutableMapping):
         '''Delete all items from the table.
         '''
 
-        with closing(self._connection.cursor()) as cursor:
-            cursor.execute(f'DELETE FROM "{self._safe_table}"')
-
-    def postpone(self, key: str) -> None:
-        '''Push back the expiration date of the given entry, if it exists.
-        '''
-        with closing(self._connection.cursor()) as cursor:
-            cursor.execute(
-                f'UPDATE "{self._safe_table}" SET expire={_unixepoch} + ? WHERE key=?',
-                (self._lifespan, key),
-            )
-
-    def postpone_all(self) -> None:
-        '''Push back the expiration date of all entries at once.
-        '''
-        with closing(self._connection.cursor()) as cursor:
-            cursor.execute(
-                f'UPDATE "{self._safe_table}" SET expire={_unixepoch} + ?',
-                (self._lifespan,),
-            )
+        with closing(self._connection.connection.cursor()) as cursor:
+            cursor.execute(f'DELETE FROM {self._database}.{self._table}')
