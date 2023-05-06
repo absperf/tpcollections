@@ -1,6 +1,8 @@
 import sqlite3
+from datetime import timedelta
 from typing import (
     Any,
+    Callable,
     Generic,
     ItemsView,
     Iterable,
@@ -11,6 +13,7 @@ from typing import (
     TypeVar,
     ValuesView,
     MutableMapping,
+    cast,
 )
 from enum import unique, Enum
 
@@ -141,9 +144,6 @@ class Items(_ViewsBase[Tuple[Key, Value]], ItemsView[Key, Value]):
                 )
 
 class _MappingBase(_db._Base, MutableMapping[Key, Value]):
-    '''A database mapping.
-    '''
-
     __slots__ = (
         '_key_serializer',
         '_value_serializer',
@@ -152,8 +152,8 @@ class _MappingBase(_db._Base, MutableMapping[Key, Value]):
         connection: _db.Connection,
         database: Identifier,
         table: Identifier,
-        key_serializer,
-        value_serializer,
+        key_serializer: _serializers.Serializer,
+        value_serializer: _serializers.Serializer,
         type: str,
     ) -> None:
         super().__init__(connection, Identifier(database), Identifier(table), type)
@@ -174,6 +174,12 @@ class _MappingBase(_db._Base, MutableMapping[Key, Value]):
         '''Check if the table is not empty.'''
 
         return len(self) > 0
+
+    def __iter__(self) -> Iterator[Key]:
+        return iter(cast(Callable[[],  Keys[Key]], self.keys)())
+
+    def __reversed__(self) -> Iterator[Key]:
+        return reversed(cast(Callable[[],  Keys[Key]], self.keys)())
 
     def keys(self, order: str) -> Keys[Key]:
         '''Iterate over keys in the table.
@@ -295,83 +301,6 @@ class _MappingBase(_db._Base, MutableMapping[Key, Value]):
         with self._connection.cursor() as cursor:
             cursor.execute(f'DELETE FROM {self._database}.{self._table}')
 
-class OrderedMapping(_MappingBase[Key, Value]):
-    '''A database mapping.
-    '''
-
-    __slots__ = ()
-
-    @unique
-    class Order(str, Enum):
-        '''An ordering enum for iteration methods.
-        '''
-
-        ID = 'id'
-        KEY = 'key'
-
-        def __str__(self) -> str:
-            return self.value
-
-        def __format__(self, format_spec: str) -> str:
-            return self.value.__format__(format_spec)
-
-    def __init__(self,
-        connection: _db.Connection,
-        database: str = 'main',
-        table: str = 'orderedmapping',
-        key_serializer: _serializers.Serializer = _serializers.deterministic_json,
-        value_serializer: _serializers.Serializer = _serializers.pickle,
-    ) -> None:
-
-        super().__init__(
-            connection=connection,
-            database=Identifier(database),
-            table=Identifier(table),
-            type='orderedmapping',
-            key_serializer=key_serializer,
-            value_serializer=value_serializer,
-        )
-
-        version = self._version
-        previous_version = version
-
-        if version < 1:
-            with self._connection.cursor() as cursor:
-                cursor.execute(f'''
-                    CREATE TABLE {self._database}.{self._table} (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        key {_db.ANY} UNIQUE NOT NULL,
-                        value {_db.ANY} NOT NULL) {_db.STRICT}
-                ''')
-                version = 1
-
-        if version > 1:
-            raise ValueError('tpcollections is not forward compatible')
-
-        if version != previous_version:
-            self._version = version
-
-    def keys(self, order: Order = Order.ID) -> Keys[Key]:
-        '''Iterate over keys in the table.
-        '''
-        return super().keys(order)
-
-    def __iter__(self) -> Iterator[Key]:
-        return iter(self.keys())
-
-    def __reversed__(self) -> Iterator[Key]:
-        return reversed(self.keys())
-
-    def values(self, order: Order = Order.ID) -> Values[Value]:
-        '''Iterate over values in the table.
-        '''
-        return super().values(order)
-
-    def items(self, order: Order = Order.ID) -> Items[Key, Value]:
-        '''Iterate over keys and values in the table.
-        '''
-        return super().items(order)
-
 class Mapping(_MappingBase[Key, Value]):
     '''A database mapping ordered by key.
 
@@ -422,12 +351,6 @@ class Mapping(_MappingBase[Key, Value]):
         '''
         return super().keys('key')
 
-    def __iter__(self) -> Iterator[Key]:
-        return iter(self.keys())
-
-    def __reversed__(self) -> Iterator[Key]:
-        return reversed(self.keys())
-
     def values(self) -> Values[Value]:
         '''Iterate over values in the table.
         '''
@@ -437,3 +360,338 @@ class Mapping(_MappingBase[Key, Value]):
         '''Iterate over keys and values in the table.
         '''
         return super().items('key')
+
+class OrderedMapping(_MappingBase[Key, Value]):
+    '''A database mapping.
+    '''
+
+    __slots__ = ()
+
+    @unique
+    class Order(str, Enum):
+        '''An ordering enum for iteration methods.
+        '''
+
+        ID = 'id'
+        KEY = 'key'
+
+        def __str__(self) -> str:
+            return self.value
+
+        def __format__(self, format_spec: str) -> str:
+            return self.value.__format__(format_spec)
+
+    def __init__(self,
+        connection: _db.Connection,
+        database: str = 'main',
+        table: str = 'orderedmapping',
+        key_serializer: _serializers.Serializer = _serializers.deterministic_json,
+        value_serializer: _serializers.Serializer = _serializers.pickle,
+    ) -> None:
+
+        super().__init__(
+            connection=connection,
+            database=Identifier(database),
+            table=Identifier(table),
+            type='orderedmapping',
+            key_serializer=key_serializer,
+            value_serializer=value_serializer,
+        )
+
+        version = self._version
+        previous_version = version
+
+        if version < 1:
+            with self._connection.cursor() as cursor:
+                cursor.execute(f'''
+                    CREATE TABLE {self._database}.{self._table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                        key {_db.ANY} UNIQUE NOT NULL,
+                        value {_db.ANY} NOT NULL) {_db.STRICT}
+                ''')
+                version = 1
+
+        if version > 1:
+            raise ValueError('tpcollections is not forward compatible')
+
+        if version != previous_version:
+            self._version = version
+
+    def keys(self, order: Order = Order.ID) -> Keys[Key]:
+        '''Iterate over keys in the table.
+        '''
+        return super().keys(order)
+
+    def values(self, order: Order = Order.ID) -> Values[Value]:
+        '''Iterate over values in the table.
+        '''
+        return super().values(order)
+
+    def items(self, order: Order = Order.ID) -> Items[Key, Value]:
+        '''Iterate over keys and values in the table.
+        '''
+        return super().items(order)
+
+class _ExpiringMappingBase(_MappingBase[Key, Value]):
+    __slots__ = (
+        '_lifespan',
+    )
+    def __init__(self,
+        connection: _db.Connection,
+        database: Identifier,
+        table: Identifier,
+        key_serializer: _serializers.Serializer,
+        value_serializer: _serializers.Serializer,
+        type: str,
+        lifespan: int,
+    ) -> None:
+        assert lifespan > 0
+
+        super().__init__(
+            connection=connection,
+            database=database,
+            table=table,
+            key_serializer=key_serializer,
+            value_serializer=value_serializer,
+            type=type,
+        )
+        self._lifespan = lifespan
+
+    @property
+    def lifespan(self) -> timedelta:
+        return timedelta(seconds=self._lifespan)
+
+    @lifespan.setter
+    def lifespan(self, value: timedelta) -> None:
+        lifespan = int(value.total_seconds())
+        assert lifespan > 0
+        self._lifespan = lifespan
+
+    def _setup_triggers(self) -> None:
+        with self._connection.cursor() as cursor:
+            trigger_name_base = self._database + "." + self._table
+            update_trigger = trigger_name_base + ".update"
+            insert_trigger = trigger_name_base + ".insert"
+
+            cursor.execute(f'''
+                CREATE TEMP TRIGGER IF NOT EXISTS {insert_trigger}
+                    AFTER INSERT ON {self._database}.{self._table}
+                BEGIN
+                    DELETE FROM {self._database}.{self._table}
+                        WHERE expire <= {_db.UNIXEPOCH};
+                END
+            ''')
+
+            cursor.execute(f'''
+                CREATE TEMP TRIGGER IF NOT EXISTS {update_trigger}
+                    AFTER UPDATE OF value ON {self._database}.{self._table}
+                BEGIN
+                    DELETE FROM {self._database}.{self._table}
+                        WHERE expire <= {_db.UNIXEPOCH};
+                END
+            ''')
+
+    def __setitem__(self, key: Key, value: Value) -> None:
+        '''Set or replace the item.
+        '''
+
+        with self._connection.cursor() as cursor:
+            if sqlite3.sqlite_version_info >= (3, 24):
+                cursor.execute(f'''
+                        INSERT INTO {self._database}.{self._table} (key, expires, value)
+                            VALUES (?, ({_db.UNIXEPOCH} + ?), ?)
+                            ON CONFLICT (key) DO UPDATE
+                            SET expires=excluded.expires, value=excluded.value
+                    ''',
+                    (
+                        self._key_serializer.dumps(key),
+                        self._lifespan,
+                        self._value_serializer.dumps(value),
+                    ),
+                )
+            elif key in self:
+                cursor.execute(f'''
+                        UPDATE {self._database}.{self._table}
+                            SET value=?3,
+                                expires=({_db.UNIXEPOCH} + ?2)
+                            WHERE key=?1
+                    ''',
+                    (
+                        self._key_serializer.dumps(key),
+                        self._lifespan,
+                        self._value_serializer.dumps(value),
+                    ),
+                )
+            else:
+                cursor.execute(f'''
+                        INSERT INTO {self._database}.{self._table} (key, expires, value)
+                            VALUES (?, ({_db.UNIXEPOCH} + ?), ?)
+                    ''',
+                    (
+                        self._key_serializer.dumps(key),
+                        self._lifespan,
+                        self._value_serializer.dumps(value),
+                    ),
+                )
+
+class ExpiringMapping(_ExpiringMappingBase[Key, Value]):
+    '''A database mapping.
+    '''
+
+    __slots__ = ()
+
+    @unique
+    class Order(str, Enum):
+        '''An ordering enum for iteration methods.
+        '''
+
+        KEY = 'key'
+        EXPIRE = 'expire'
+
+        def __str__(self) -> str:
+            return self.value
+
+        def __format__(self, format_spec: str) -> str:
+            return self.value.__format__(format_spec)
+
+    def __init__(self,
+        connection: _db.Connection,
+        database: str = 'main',
+        table: str = 'expiringmapping',
+        key_serializer: _serializers.Serializer = _serializers.deterministic_json,
+        value_serializer: _serializers.Serializer = _serializers.pickle,
+        lifespan: timedelta = timedelta(weeks=1),
+    ) -> None:
+
+        super().__init__(
+            connection=connection,
+            database=Identifier(database),
+            table=Identifier(table),
+            type='expiringmapping',
+            key_serializer=key_serializer,
+            value_serializer=value_serializer,
+            lifespan=int(lifespan.total_seconds()),
+        )
+
+        version = self._version
+        previous_version = version
+
+        if version < 1:
+            with self._connection.cursor() as cursor:
+                cursor.execute(f'''
+                    CREATE TABLE {self._database}.{self._table} (
+                        key {_db.ANY} PRIMARY KEY UNIQUE NOT NULL,
+                        expires INTEGER NOT NULL,
+                        value {_db.ANY} NOT NULL) {_db.STRICT}
+                ''')
+
+                cursor.execute(f'''
+                    CREATE INDEX {self._database}.{self._table + "_expires"}
+                        ON {self._database}.{self._table} (expires ASC)
+                ''')
+                version = 1
+
+        if version > 1:
+            raise ValueError('tpcollections is not forward compatible')
+
+        if version != previous_version:
+            self._version = version
+
+        self._setup_triggers()
+
+    def keys(self, order: Order = Order.KEY) -> Keys[Key]:
+        '''Iterate over keys in the table.
+        '''
+        return super().keys(order)
+
+    def values(self, order: Order = Order.KEY) -> Values[Value]:
+        '''Iterate over values in the table.
+        '''
+        return super().values(order)
+
+    def items(self, order: Order = Order.KEY) -> Items[Key, Value]:
+        '''Iterate over keys and values in the table.
+        '''
+        return super().items(order)
+
+class ExpiringOrderedMapping(_ExpiringMappingBase[Key, Value]):
+    '''A database mapping.
+    '''
+
+    __slots__ = ()
+
+    @unique
+    class Order(str, Enum):
+        '''An ordering enum for iteration methods.
+        '''
+
+        ID = 'id'
+        KEY = 'key'
+        EXPIRE = 'expire'
+
+        def __str__(self) -> str:
+            return self.value
+
+        def __format__(self, format_spec: str) -> str:
+            return self.value.__format__(format_spec)
+
+    def __init__(self,
+        connection: _db.Connection,
+        database: str = 'main',
+        table: str = 'expiringorderedmapping',
+        key_serializer: _serializers.Serializer = _serializers.deterministic_json,
+        value_serializer: _serializers.Serializer = _serializers.pickle,
+        lifespan: timedelta = timedelta(weeks=1),
+    ) -> None:
+
+        super().__init__(
+            connection=connection,
+            database=Identifier(database),
+            table=Identifier(table),
+            type='expiringorderedmapping',
+            key_serializer=key_serializer,
+            value_serializer=value_serializer,
+            lifespan=int(lifespan.total_seconds()),
+        )
+
+        version = self._version
+        previous_version = version
+
+        if version < 1:
+            with self._connection.cursor() as cursor:
+                cursor.execute(f'''
+                    CREATE TABLE {self._database}.{self._table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                        key {_db.ANY} UNIQUE NOT NULL,
+                        expires INTEGER NOT NULL,
+                        value {_db.ANY} NOT NULL) {_db.STRICT}
+                ''')
+
+                cursor.execute(f'''
+                    CREATE INDEX {self._database}.{self._table + "_expires"}
+                        ON {self._database}.{self._table} (expires ASC)
+                ''')
+                version = 1
+
+        if version > 1:
+            raise ValueError('tpcollections is not forward compatible')
+
+        if version != previous_version:
+            self._version = version
+
+        self._setup_triggers()
+
+    def keys(self, order: Order = Order.ID) -> Keys[Key]:
+        '''Iterate over keys in the table.
+        '''
+        return super().keys(order)
+
+    def values(self, order: Order = Order.ID) -> Values[Value]:
+        '''Iterate over values in the table.
+        '''
+        return super().values(order)
+
+    def items(self, order: Order = Order.ID) -> Items[Key, Value]:
+        '''Iterate over keys and values in the table.
+        '''
+        return super().items(order)
