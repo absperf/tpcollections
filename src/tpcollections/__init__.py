@@ -5,6 +5,20 @@ from ._mapping import (
     ExpiringMapping,
     ExpiringOrderedMapping,
 )
+from._serializers import (
+    Serializer,
+    json,
+    deterministic_json,
+    pickle,
+)
+
+try:
+    from._serializers import (
+        deterministic_orjson,
+        orjson,
+    )
+except ImportError:
+    pass
 
 __all__ = (
     'Connection',
