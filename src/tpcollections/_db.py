@@ -59,8 +59,8 @@ class Mode(Enum):
     READ_ONLY = auto()
 
     # The database will not have any writes or locks done to it or its
-    # filesystem.  Other connections are expected to not write to the database
-    # at all.
+    # filesystem.  Only use this if you know the database will not be written to
+    # by any other process at all.
     IMMUTABLE = auto()
 
 def _uri(
@@ -79,6 +79,8 @@ def _uri(
             uri += '?mode=ro'
         elif mode is Mode.IMMUTABLE:
             uri += '?immutable=1'
+        else:
+            uri += '?mode=rwc'
 
         return uri
 
@@ -106,9 +108,7 @@ class Database:
     def __init__(self,
         path: Optional[Path] = None,
         mode: Mode = Mode.READ_WRITE,
-        # TODO: Make wal Optional, and have it default to on, but switch self to off when attaching any databases.
-        # Also switch synchronous at the same time.
-        wal: bool = False,
+        wal: Optional[bool] = None,
         timeout: float = 5.0,
         **kwargs,
     ) -> None:
@@ -185,22 +185,26 @@ class Connection:
         '_mode',
         '_transactions',
         '_wal',
+        '_has_attachments',
         '__weakref__',
     )
 
     def __init__(self,
         connection: sqlite3.Connection,
         mode: Mode,
-        wal: bool,
+        wal: Optional[bool],
     ) -> None:
         self._connection = connection
         self._attachments: Set[str] = {'main'}
         self._mode = mode
         self._transactions: List[ContextManager[None]] = []
         self._wal = wal
+        self._has_attachments = False
         self._init(Identifier('main'))
 
     def _init(self, database: Identifier) -> None:
+        '''Initialize a database or attachment.
+        '''
         with self.cursor() as cursor:
             application_id = next(cursor.execute('PRAGMA application_id'))[0]
             if application_id == 0:
@@ -267,16 +271,27 @@ class Connection:
                     'Attaching a database inside a transaction can prevent '
                     'transactions from being atomic.'
                 )
+
+            if self._wal is None and not self._has_attachments and not self.read_only:
+                # disable WAL mode when attaching databases
+                cursor.execute(f'PRAGMA main.journal_mode=DELETE')
+                cursor.execute(f'PRAGMA main.synchronous=FULL')
+                self._has_attachments = True
+
             cursor.execute(f'ATTACH ? AS {database_id}', (uri,))
-            if self._wal and not self.read_only:
-                if __debug__:
-                    warnings.warn(
-                        'Attaching a database in wal mode can cause'
-                        ' non-atomic transactions:'
-                        ' https://www.sqlite.org/lang_attach.html'
-                    )
-                cursor.execute(f'PRAGMA {database_id}.journal_mode=WAL')
-                cursor.execute(f'PRAGMA {database_id}.synchronous=NORMAL')
+            if not self.read_only:
+                if self._wal:
+                    if __debug__:
+                        warnings.warn(
+                            'Attaching a database in forced wal mode can cause'
+                            ' non-atomic transactions:'
+                            ' https://www.sqlite.org/lang_attach.html'
+                        )
+                    cursor.execute(f'PRAGMA {database_id}.journal_mode=WAL')
+                    cursor.execute(f'PRAGMA {database_id}.synchronous=NORMAL')
+                else:
+                    cursor.execute(f'PRAGMA {database_id}.journal_mode=DELETE')
+                    cursor.execute(f'PRAGMA {database_id}.synchronous=FULL')
 
         self._init(database_id)
 
@@ -284,7 +299,7 @@ class Connection:
 def _connect(
     uri: str,
     mode: Mode,
-    wal: bool,
+    wal: Optional[bool],
     timeout: float,
 ) -> Generator[Connection, None, None]:
     with (
@@ -299,12 +314,17 @@ def _connect(
         closing(connection.cursor()) as cursor,
     ):
         try:
-            if wal and mode is Mode.READ_WRITE:
-                cursor.execute('PRAGMA main.journal_mode=WAL')
-                cursor.execute('PRAGMA main.synchronous=NORMAL')
+            if mode is Mode.READ_WRITE:
+                if wal is True or wal is None:
+                    cursor.execute('PRAGMA main.journal_mode=WAL')
+                    cursor.execute('PRAGMA main.synchronous=NORMAL')
+                else:
+                    cursor.execute('PRAGMA main.journal_mode=DELETE')
+                    cursor.execute('PRAGMA main.synchronous=FULL')
 
             yield Connection(connection, mode, wal)
         finally:
+            # TODO: skip this for in-memory databases
             if mode is Mode.READ_WRITE:
                 cursor.execute('PRAGMA analysis_limit=8192')
                 cursor.execute('PRAGMA optimize')
