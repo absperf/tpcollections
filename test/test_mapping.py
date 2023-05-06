@@ -3,7 +3,7 @@
 # Copyright © 2021 Taylor C. Richberger
 # This code is released under the license described in the LICENSE file
 
-from contextlib import closing
+from contextlib import closing, suppress
 import sqlite3
 import unittest
 from datetime import timedelta
@@ -133,247 +133,73 @@ class TestExpiringDict(unittest.TestCase):
                 self.assertEqual(tuple(d.values()), (1337, 'spam'))
                 self.assertEqual(len(d), 2)
 
-    # def test_migration(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
+    def test_transactions(self):
+        with Database() as db:
+            d = Mapping(db)
+            d['foo'] = 'bar'
+            with suppress(RuntimeError):
+                with db:
+                    d['baz'] = 1337
+                    self.assertIn('baz', d)
+                    self.assertEqual(d['baz'], 1337)
+                    with suppress(RuntimeError):
+                        with db:
+                            del d['baz']
+                            d['foo'] = 'beta'
+                            self.assertNotIn('baz', d)
+                            self.assertEqual(d['foo'], 'beta')
+                            with suppress(RuntimeError):
+                                with db:
+                                    d['baz'] = 1338
+                                    del d['foo']
+                                    self.assertNotIn('foo', d)
+                                    self.assertEqual(d['baz'], 1338)
+                                    raise RuntimeError
+                            self.assertNotIn('baz', d)
+                            self.assertEqual(d['foo'], 'beta')
+                            raise RuntimeError
 
-    #         with closing(sqlite3.connect(str(db_path))) as connection:
-    #             with closing(connection.cursor()) as cursor:
-    #                 cursor.execute('''
-    #                     CREATE TABLE tpcollections (
-    #                         key TEXT UNIQUE PRIMARY KEY NOT NULL,
-    #                         expire INTEGER NOT NULL,
-    #                         value BLOB NOT NULL
-    #                     )
-    #                 ''')
-    #                 cursor.execute('''
-    #                     CREATE INDEX tpcollections_expire_index
-    #                         ON tpcollections (expire)
-    #                 ''')
-    #                 cursor.execute('''
-    #                     CREATE TRIGGER tpcollections_insert_trigger
-    #                         AFTER INSERT ON tpcollections
-    #                     BEGIN
-    #                         DELETE FROM tpcollections
-    #                             WHERE expire <= strftime('%s', 'now');
-    #                     END
-    #                 ''')
-    #                 cursor.execute('''
-    #                     CREATE TRIGGER tpcollections_update_trigger
-    #                         AFTER UPDATE ON tpcollections
-    #                     BEGIN
-    #                         DELETE FROM tpcollections
-    #                             WHERE expire <= strftime('%s', 'now');
-    #                     END
-    #                 ''')
-    #                 cursor.executemany(
-    #                     '''
-    #                         INSERT INTO tpcollections (key, expire, value)
-    #                         VALUES (?, strftime('%s', 'now', '+7 days'), ?)
-    #                     ''',
-    #                     (
-    #                         ('foo', '"bar"'),
-    #                         ('baz', '1337'),
-    #                     ),
-    #                 )
-    #             connection.commit()
+                    self.assertIn('baz', d)
+                    self.assertEqual(d['baz'], 1337)
+                    self.assertEqual(d['foo'], 'bar')
+                    d.clear()
+                    self.assertNotIn('foo', d)
+                    self.assertNotIn('baz', d)
+                    self.assertFalse(d)
+                    raise RuntimeError
+            self.assertTrue(d)
+            self.assertNotIn('baz', d)
+            self.assertEqual(d['foo'], 'bar')
 
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(set(d), {'foo', 'baz'})
-    #             self.assertEqual(set(d.keys()), {'foo', 'baz'})
-    #             self.assertEqual(set(d.items()), {('foo', 'bar'), ('baz', 1337)})
-    #             self.assertEqual(set(d.values()), {'bar', 1337})
-    #             self.assertEqual(len(d), 2)
+    def test_attachments(self):
+        with TemporaryDirectory() as dir:
+            dir = Path(dir)
 
-    #         with SqliteDict(str(db_path)) as d:
-    #             d['foo'] = 'barbar'
+            with Database(dir / 'alpha.db') as connection:
+                connection.attach('beta', dir / 'beta.db')
 
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(tuple(d), ('foo', 'baz'))
-    #             self.assertEqual(tuple(d.keys()), ('foo', 'baz'))
-    #             self.assertEqual(tuple(d.items()), (('foo', 'barbar'), ('baz', 1337)))
-    #             self.assertEqual(tuple(d.values()), ('barbar', 1337))
-    #             self.assertEqual(len(d), 2)
+                alpha = Mapping(connection, table='gamma')
+                beta = Mapping(connection, database='beta', table='delta')
 
-    #         with SqliteDict(str(db_path)) as d:
-    #             del d['foo']
+                with connection:
+                    alpha['epsilon'] = 'zeta'
+                    beta['eta'] = 'theta'
+                    with suppress(RuntimeError):
+                        with connection:
+                            alpha['epsilon'] = 'iota'
+                            beta['eta'] = 'kappa'
+                            raise RuntimeError
 
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(tuple(d), ('baz',))
-    #             self.assertEqual(tuple(d.keys()), ('baz',))
-    #             self.assertEqual(tuple(d.items()), (('baz', 1337),))
-    #             self.assertEqual(tuple(d.values()), (1337,))
-    #             self.assertEqual(len(d), 1)
+            with Database(dir / 'beta.db') as connection:
+                connection.attach('alpha', dir / 'alpha.db')
 
-    #         with self.assertRaises(KeyError):
-    #             with SqliteDict(str(db_path)) as d:
-    #                 del d['foo']
+                alpha = Mapping(connection, database='alpha', table='gamma')
+                beta = Mapping(connection, table='delta')
+
+                self.assertEqual(alpha['epsilon'], 'zeta')
+                self.assertEqual(beta['eta'], 'theta')
 
             
-    #         with SqliteDict(str(db_path)) as d:
-    #             d['foo'] = 'spam'
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(tuple(d), ('baz', 'foo'))
-    #             self.assertEqual(tuple(d.keys()), ('baz', 'foo'))
-    #             self.assertEqual(tuple(d.items()), (('baz', 1337), ('foo', 'spam')))
-    #             self.assertEqual(tuple(d.values()), (1337, 'spam'))
-    #             self.assertEqual(len(d), 2)
-
-    # def test_quotes(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(
-    #             str(db_path),
-    #             table = 'Name\\with"special\t-_ char""ac"""ters',
-    #         ) as d:
-    #             self.assertFalse(bool(d))
-    #             self.assertEqual(tuple(d), ())
-    #             self.assertEqual(tuple(d.keys()), ())
-    #             self.assertEqual(tuple(d.items()), ())
-    #             self.assertEqual(tuple(d.values()), ())
-    #             self.assertEqual(len(d), 0)
-    #             d['foo'] = 'bar'
-    #             d['baz'] = 1337
-
-    #         with SqliteDict(
-    #             str(db_path),
-    #             table = 'Name\\with"special\t-_ char""ac"""ters',
-    #         ) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(tuple(d), ('foo', 'baz'))
-    #             self.assertEqual(tuple(d.keys()), ('foo', 'baz'))
-    #             self.assertEqual(tuple(d.items()), (('foo', 'bar'), ('baz', 1337)))
-    #             self.assertEqual(tuple(d.values()), ('bar', 1337))
-    #             self.assertEqual(len(d), 2)
-
-    # def test_autocommit(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         d = SimpleSqliteDict(str(db_path))
-    #         self.assertFalse(bool(d))
-    #         self.assertEqual(tuple(d), ())
-    #         self.assertEqual(tuple(d.keys()), ())
-    #         self.assertEqual(tuple(d.items()), ())
-    #         self.assertEqual(tuple(d.values()), ())
-    #         self.assertEqual(len(d), 0)
-    #         d['foo'] = 'bar'
-    #         d['baz'] = 1337
-
-    #         d = SimpleSqliteDict(str(db_path))
-    #         self.assertTrue(bool(d))
-    #         self.assertEqual(tuple(d), ('foo', 'baz'))
-    #         self.assertEqual(tuple(d.keys()), ('foo', 'baz'))
-    #         self.assertEqual(tuple(d.items()), (('foo', 'bar'), ('baz', 1337)))
-    #         self.assertEqual(tuple(d.values()), ('bar', 1337))
-    #         self.assertEqual(len(d), 2)
-
-    # def test_isolation_level(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         d = SimpleSqliteDict(str(db_path), isolation_level='DEFERRED')
-    #         self.assertFalse(bool(d))
-    #         self.assertEqual(tuple(d), ())
-    #         self.assertEqual(tuple(d.keys()), ())
-    #         self.assertEqual(tuple(d.items()), ())
-    #         self.assertEqual(tuple(d.values()), ())
-    #         self.assertEqual(len(d), 0)
-    #         d['foo'] = 'bar'
-    #         d.connection.commit()
-    #         d['baz'] = 1337
-    #         d.connection.rollback()
-
-    #         d = SimpleSqliteDict(str(db_path))
-    #         self.assertTrue(bool(d))
-    #         self.assertEqual(tuple(d), ('foo',))
-    #         self.assertEqual(tuple(d.keys()), ('foo',))
-    #         self.assertEqual(tuple(d.items()), (('foo', 'bar'),))
-    #         self.assertEqual(tuple(d.values()), ('bar',))
-    #         self.assertEqual(len(d), 1)
-
-    # def test_nested(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             d['foo'] = {'foo': 'bar', 'baz': [2, 'two']}
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertEqual(d['foo'], {'foo': 'bar', 'baz': [2, 'two']})
-
-    # def test_json(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path), serializer = json) as d:
-    #             d['foo'] = {'foo': 'bar', 'baz': [2, 'two']}
-
-    #         with SqliteDict(str(db_path), serializer = json) as d:
-    #             self.assertEqual(d['foo'], {'foo': 'bar', 'baz': [2, 'two']})
-
-    # def test_orjson(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path), serializer = orjson) as d:
-    #             d['foo'] = {'foo': 'bar', 'baz': [2, 'two']}
-
-    #         with SqliteDict(str(db_path), serializer = orjson) as d:
-    #             self.assertEqual(d['foo'], {'foo': 'bar', 'baz': [2, 'two']})
-
-    # def test_pickle(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path), serializer = pickle) as d:
-    #             d['foo'] = {'foo': 'bar', 'baz': [2, 'two']}
-
-    #         with SqliteDict(str(db_path), serializer = pickle) as d:
-    #             self.assertEqual(d['foo'], {'foo': 'bar', 'baz': [2, 'two']})
-
-    # def test_marshal(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path), serializer = marshal) as d:
-    #             d['foo'] = {'foo': 'bar', 'baz': [2, 'two']}
-
-    #         with SqliteDict(str(db_path), serializer = marshal) as d:
-    #             self.assertEqual(d['foo'], {'foo': 'bar', 'baz': [2, 'two']})
-
-    # def test_expire(self):
-    #     with TemporaryDirectory() as temporary_directory:
-    #         db_path = Path(temporary_directory) / 'test.db'
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             d['foo'] = 'bar'
-    #             d['postponed'] = 'worked'
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             d.lifespan = timedelta(weeks=-1)
-    #             d.postpone_all()
-    #             d.lifespan = timedelta(weeks=1)
-    #             d.postpone('postponed')
-    #             # This triggers the actual expiry
-    #             d['baz'] = 1337
-
-    #         with SqliteDict(str(db_path)) as d:
-    #             self.assertTrue(bool(d))
-    #             self.assertEqual(tuple(d), ('postponed', 'baz'))
-    #             self.assertEqual(tuple(d.keys()), ('postponed', 'baz'))
-    #             self.assertEqual(
-    #                 tuple(d.items()),
-    #                 (('postponed', 'worked'), ('baz', 1337)),
-    #             )
-    #             self.assertEqual(tuple(d.values()), ('worked', 1337))
-    #             self.assertEqual(len(d), 2)
 
 if __name__ == '__main__':
     unittest.main()

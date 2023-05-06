@@ -210,19 +210,19 @@ class Connection:
         with self.cursor() as cursor:
             application_id = next(cursor.execute('PRAGMA application_id'))[0]
             if application_id == 0:
-                cursor.execute(f'PRAGMA application_id = {_APPLICATION_ID}')
+                cursor.execute(f'PRAGMA {database}.application_id = {_APPLICATION_ID}')
             elif application_id != _APPLICATION_ID:
                 raise ValueError(f'illegal application ID {application_id}')
 
-            user_version = next(cursor.execute('PRAGMA user_version'))[0]
+            user_version = next(cursor.execute(f'PRAGMA {database}.user_version'))[0]
             if user_version == 0:
-                cursor.execute(f'PRAGMA user_version = 1')
+                cursor.execute(f'PRAGMA {database}.user_version = 1')
             elif user_version != 1:
-                raise ValueError(f'user_version was {user_version}')
+                raise ValueError(f'user_version for {database} was {user_version}')
 
             if not self.read_only:
                 cursor.execute(f'''
-                    CREATE TABLE IF NOT EXISTS main.tpcollections (
+                    CREATE TABLE IF NOT EXISTS {database}.tpcollections (
                         name TEXT PRIMARY KEY NOT NULL,
                         type TEXT NOT NULL,
                         version INTEGER NOT NULL
@@ -341,7 +341,7 @@ class _Base:
             row = cursor.fetchone()
             if row is None:
                 cursor.execute(
-                    'SELECT 1 FROM sqlite_master WHERE name = ?',
+                    f'SELECT 1 FROM {database}.sqlite_master WHERE name = ?',
                     (table.value,)
                 )
                 if cursor.fetchone() is not None:
