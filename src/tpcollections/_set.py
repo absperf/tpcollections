@@ -1,16 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-#
-# This code is distributed under the terms and conditions
-# from the Apache License, Version 2.0
-#
-# http://opensource.org/licenses/apache2.0.php
-#
-# This code was inspired by:
-#  * http://code.activestate.com/recipes/576638-draft-for-an-sqlite3-based-dbm/
-#  * http://code.activestate.com/recipes/526618/
-
-
 import sqlite3
 from collections.abc import MutableMapping
 from typing import Any, Generic, ItemsView, Iterable, Iterator, KeysView, Reversible, Tuple, TypeVar, ValuesView
@@ -21,7 +8,7 @@ from ._util import Identifier
 from . import _db, _serializers
 
 @unique
-class MappingOrder(str, Enum):
+class Order(str, Enum):
     '''An ordering enum for iteration methods.
     '''
 
@@ -34,11 +21,11 @@ class MappingOrder(str, Enum):
     def __format__(self, format_spec: str) -> str:
         return self.value.__format__(format_spec)
 
-KeyType = TypeVar('KeyType')
+Item = TypeVar('KeyType')
 
-class ViewsBase(Reversible[KeyType], Iterable[KeyType]):
-    __slots__ = (
-    )
+class ViewsBase(Reversible[Item], Iterable[Item]):
+    __slots__ = ()
+
     def __init__(
         self,
         connection: _db.Connection,
@@ -49,7 +36,7 @@ class ViewsBase(Reversible[KeyType], Iterable[KeyType]):
         self._database = database
         self._table = table
 
-    def _iterator(self, order: str) -> Iterator[KeyType]:
+    def _iterator(self, order: str) -> Iterator[Item]:
         raise NotImplementedError
 
     def __len__(self) -> int:
@@ -57,10 +44,10 @@ class ViewsBase(Reversible[KeyType], Iterable[KeyType]):
             len, = cursor.execute(f'SELECT COUNT(*) FROM {self._database}.{self._table}').fetchone()
             return len
 
-    def __iter__(self) -> Iterator[KeyType]:
+    def __iter__(self) -> Iterator[Item]:
         return self._iterator('ASC')
 
-    def __reversed__(self) -> Iterator[KeyType]:
+    def __reversed__(self) -> Iterator[Item]:
         return self._iterator('DESC')
 
 class Keys(ViewsBase[Any], KeysView[Any]):
@@ -78,7 +65,7 @@ class Keys(ViewsBase[Any], KeysView[Any]):
         database: Identifier,
         table: Identifier,
         serializer: _serializers.Serializer,
-        order: MappingOrder,
+        order: Order,
     ) -> None:
         super().__init__(
             connection=connection,
@@ -110,7 +97,7 @@ class Values(ViewsBase[Any], ValuesView[Any]):
         database: Identifier,
         table: Identifier,
         serializer: _serializers.Serializer,
-        order: MappingOrder,
+        order: Order,
     ) -> None:
         super().__init__(
             connection=connection,
@@ -144,7 +131,7 @@ class Items(ViewsBase[Tuple[Any, Any]], ItemsView[Any, Any]):
         table: Identifier,
         key_serializer: _serializers.Serializer,
         value_serializer: _serializers.Serializer,
-        order: MappingOrder,
+        order: Order,
     ) -> None:
         super().__init__(
             connection=connection,
@@ -166,7 +153,7 @@ class Items(ViewsBase[Tuple[Any, Any]], ItemsView[Any, Any]):
                     self._value_serializer.loads(value),
                 )
 
-class Mapping(_db._Base, MutableMapping):
+class OrderedMapping(_db._Base, MutableMapping):
     '''A database mapping.
     '''
 
@@ -221,7 +208,7 @@ class Mapping(_db._Base, MutableMapping):
 
         return len(self) > 0
 
-    def keys(self, order: MappingOrder = MappingOrder.ID) -> Keys:
+    def keys(self, order: Order = Order.ID) -> Keys:
         '''Iterate over keys in the table.
         '''
 
@@ -239,7 +226,7 @@ class Mapping(_db._Base, MutableMapping):
     def __reversed__(self) -> Iterator[Any]:
         return reversed(self.keys())
 
-    def values(self, order: MappingOrder = MappingOrder.ID) -> Values:
+    def values(self, order: Order = Order.ID) -> Values:
         '''Iterate over values in the table.
         '''
 
@@ -251,7 +238,7 @@ class Mapping(_db._Base, MutableMapping):
             order=order,
         )
 
-    def items(self, order: MappingOrder = MappingOrder.ID) -> Items:
+    def items(self, order: Order = Order.ID) -> Items:
         '''Iterate over keys and values in the table.
         '''
 

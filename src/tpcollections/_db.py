@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -173,7 +170,7 @@ else:
 
 _APPLICATION_ID = -1238962565
 
-_STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
+STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
 
 class Connection:
     '''The actual connection object, as a MutableMapping[str, Any].
@@ -223,7 +220,7 @@ class Connection:
                         name TEXT PRIMARY KEY NOT NULL,
                         type TEXT NOT NULL,
                         version INTEGER NOT NULL
-                    ) {_STRICT_WITHOUT_ROWID}
+                    ) {STRICT_WITHOUT_ROWID}
                 ''')
 
     @property
