@@ -3,7 +3,6 @@ from datetime import timedelta
 from typing import (
     Any,
     Callable,
-    Generic,
     ItemsView,
     Iterable,
     Iterator,

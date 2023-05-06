@@ -275,8 +275,8 @@ class Connection:
 
             if not (self._memory or self._has_attachments or self.read_only):
                 # disable WAL mode when attaching databases
-                cursor.execute(f'PRAGMA main.journal_mode=DELETE')
-                cursor.execute(f'PRAGMA main.synchronous=FULL')
+                cursor.execute('PRAGMA main.journal_mode=DELETE')
+                cursor.execute('PRAGMA main.synchronous=FULL')
                 self._has_attachments = True
 
             cursor.execute(f'ATTACH ? AS {database_id}', (uri,))
