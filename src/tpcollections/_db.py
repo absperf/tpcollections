@@ -1,16 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import json
 import sqlite3
-from collections.abc import MutableMapping
-from functools import wraps
-from contextlib import ExitStack, closing, contextmanager
-from datetime import timedelta
+from contextlib import closing, contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any, ContextManager, Generator, Iterable, Iterator, List, Optional, Reversible, Set, Tuple, Type, Union
-from weakref import finalize
+from typing import ContextManager, Generator, List, Optional, Set, Type
 from enum import auto, unique, Enum
 import warnings
 

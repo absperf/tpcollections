@@ -1,5 +1,5 @@
 import json as _json
-from typing import Callable, NamedTuple, Union, Any
+from typing import Callable, NamedTuple, Any
 from functools import partial
 import pickle as _pickle
 

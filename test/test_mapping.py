@@ -3,16 +3,11 @@
 # Copyright © 2021 Taylor C. Richberger
 # This code is released under the license described in the LICENSE file
 
-from contextlib import closing, suppress
-import sqlite3
+from contextlib import suppress
 import unittest
-from datetime import timedelta
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from tpcollections import Database, Mapping, MappingOrder
-import json
-import marshal
-import pickle
 
 class TestExpiringDict(unittest.TestCase):
     def test_simple(self):
