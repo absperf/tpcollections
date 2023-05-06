@@ -46,7 +46,7 @@ There may be more in the future, if needed.
 * Supports 
 * Supported and tested on every reasonable version of Python and SQLite.
   * Tests are run all supported versions of Python, and on all in-support
-    versions of RHEL, CentOS, Fedora, Debian, and Alpine Linux.
+    versions of RHEL, CentOS, Fedora, Debian, Ubuntu, and Alpine Linux.
     * This includes versions of Python or SQLite otherwise considered out of
       support by upstream.  At the time of this writing, this includes CentOS 7
       and therefore Python 3.6.8 and SQLite 3.7.17.
