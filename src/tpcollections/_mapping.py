@@ -1,6 +1,17 @@
 import sqlite3
-from collections.abc import MutableMapping
-from typing import Any, Generic, ItemsView, Iterable, Iterator, KeysView, Reversible, Tuple, TypeVar, ValuesView
+from typing import (
+    Any,
+    Generic,
+    ItemsView,
+    Iterable,
+    Iterator,
+    KeysView,
+    Reversible,
+    Tuple,
+    TypeVar,
+    ValuesView,
+    MutableMapping,
+)
 from enum import unique, Enum
 
 from ._util import Identifier

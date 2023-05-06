@@ -15,10 +15,7 @@ class TestExpiringDict(unittest.TestCase):
         with TemporaryDirectory() as temporary_directory:
             db_path = Path(temporary_directory) / 'test.db'
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 self.assertFalse(bool(d))
                 self.assertEqual(tuple(d), ())
@@ -29,10 +26,7 @@ class TestExpiringDict(unittest.TestCase):
                 d['foo'] = 'bar'
                 d['baz'] = 1337
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 self.assertTrue(bool(d))
                 self.assertEqual(tuple(d), ('foo', 'baz'))
@@ -63,17 +57,11 @@ class TestExpiringDict(unittest.TestCase):
                 )
                 self.assertEqual(tuple(reversed(d.values(OrderedMapping.Order.KEY))), ('bar', 1337))
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 d['foo'] = 'barbar'
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 self.assertTrue(bool(d))
                 self.assertEqual(tuple(d), ('foo', 'baz'))
@@ -82,17 +70,11 @@ class TestExpiringDict(unittest.TestCase):
                 self.assertEqual(tuple(d.values()), ('barbar', 1337))
                 self.assertEqual(len(d), 2)
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 del d['foo']
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 self.assertTrue(bool(d))
                 self.assertEqual(tuple(d), ('baz',))
@@ -102,25 +84,16 @@ class TestExpiringDict(unittest.TestCase):
                 self.assertEqual(len(d), 1)
 
             with self.assertRaises(KeyError):
-                with (
-                    Database(db_path) as db,
-                    db,
-                ):
+                with Database(db_path) as db, db:
                     d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                     del d['foo']
 
             
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 d['foo'] = 'spam'
 
-            with (
-                Database(db_path) as db,
-                db,
-            ):
+            with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
                 self.assertTrue(bool(d))
                 self.assertEqual(tuple(d), ('baz', 'foo'))

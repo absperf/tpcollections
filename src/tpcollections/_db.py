@@ -11,11 +11,8 @@ from ._util import Identifier
 @contextmanager
 def _savepoint(
     connection: sqlite3.Connection,
-    name: Identifier | str = Identifier('tpcollection'),
+    name: Identifier = Identifier('tpcollection'),
 ) -> Generator[None, None, None]:
-    if isinstance(name, str):
-        name = Identifier(name)
-
     with closing(connection.cursor()) as cursor:
         cursor.execute(f'SAVEPOINT {name}')
         try:
@@ -101,36 +98,40 @@ class Database:
         '_mode',
         '_connection',
         '_timeout',
-        '_wal',
+        '_memory',
         '__weakref__'
     )
 
     def __init__(self,
         path: Optional[Path] = None,
         mode: Mode = Mode.READ_WRITE,
-        wal: Optional[bool] = None,
         timeout: float = 5.0,
         **kwargs,
     ) -> None:
-        assert not (path is None and mode is not Mode.READ_WRITE), (
-            'An in-memory database must be read-write'
-        )
+        if path is None:
+            self._mode = mode.READ_WRITE
+            self._memory = False
+        else:
+            self._mode = mode
+            self._memory = True
 
-        self._mode = mode
         self._uri = _uri(path, mode)
-        self._wal = wal
         self._timeout = timeout
 
     @property
     def read_only(self) -> bool:
         return self._mode is not Mode.READ_WRITE
 
+    @property
+    def memory(self) -> bool:
+        return self._memory
+
     def __call__(self) -> ContextManager['Connection']:
         return _connect(
-            self._uri,
-            self._mode,
-            self._wal,
-            self._timeout,
+            uri=self._uri,
+            mode=self._mode,
+            timeout=self._timeout,
+            memory=self._memory,
         )
 
     def __enter__(self) -> 'Connection':
@@ -184,22 +185,22 @@ class Connection:
         '_attachments',
         '_mode',
         '_transactions',
-        '_wal',
         '_has_attachments',
+        '_memory',
         '__weakref__',
     )
 
     def __init__(self,
         connection: sqlite3.Connection,
         mode: Mode,
-        wal: Optional[bool],
+        memory: bool,
     ) -> None:
         self._connection = connection
         self._attachments: Set[str] = {'main'}
         self._mode = mode
         self._transactions: List[ContextManager[None]] = []
-        self._wal = wal
         self._has_attachments = False
+        self._memory = memory
         self._init(Identifier('main'))
 
     def _init(self, database: Identifier) -> None:
@@ -272,60 +273,50 @@ class Connection:
                     'transactions from being atomic.'
                 )
 
-            if self._wal is None and not self._has_attachments and not self.read_only:
+            if not (self._memory or self._has_attachments or self.read_only):
                 # disable WAL mode when attaching databases
                 cursor.execute(f'PRAGMA main.journal_mode=DELETE')
                 cursor.execute(f'PRAGMA main.synchronous=FULL')
                 self._has_attachments = True
 
             cursor.execute(f'ATTACH ? AS {database_id}', (uri,))
-            if not self.read_only:
-                if self._wal:
-                    if __debug__:
-                        warnings.warn(
-                            'Attaching a database in forced wal mode can cause'
-                            ' non-atomic transactions:'
-                            ' https://www.sqlite.org/lang_attach.html'
-                        )
-                    cursor.execute(f'PRAGMA {database_id}.journal_mode=WAL')
-                    cursor.execute(f'PRAGMA {database_id}.synchronous=NORMAL')
-                else:
+            try:
+                if not (self.read_only or self._memory):
                     cursor.execute(f'PRAGMA {database_id}.journal_mode=DELETE')
                     cursor.execute(f'PRAGMA {database_id}.synchronous=FULL')
 
-        self._init(database_id)
+                self._init(database_id)
+            except:
+                cursor.execute(f'DETACH {database_id}')
+                raise
 
 @contextmanager
 def _connect(
     uri: str,
     mode: Mode,
-    wal: Optional[bool],
     timeout: float,
+    memory: bool,
 ) -> Generator[Connection, None, None]:
-    with (
-        closing(sqlite3.connect(
-            uri,
-            timeout=timeout,
-            isolation_level=None,
-            check_same_thread=__debug__,
-            uri=True,
-            cached_statements=1024,
-        )) as connection,
-        closing(connection.cursor()) as cursor,
-    ):
+    with closing(sqlite3.connect(
+        uri,
+        timeout=timeout,
+        isolation_level=None,
+        check_same_thread=__debug__,
+        uri=True,
+        cached_statements=1024,
+    )) as connection, closing(connection.cursor()) as cursor:
         try:
-            if mode is Mode.READ_WRITE:
-                if wal is True or wal is None:
-                    cursor.execute('PRAGMA main.journal_mode=WAL')
-                    cursor.execute('PRAGMA main.synchronous=NORMAL')
-                else:
-                    cursor.execute('PRAGMA main.journal_mode=DELETE')
-                    cursor.execute('PRAGMA main.synchronous=FULL')
+            if not memory and mode is Mode.READ_WRITE:
+                cursor.execute('PRAGMA main.journal_mode=WAL')
+                cursor.execute('PRAGMA main.synchronous=NORMAL')
 
-            yield Connection(connection, mode, wal)
+            yield Connection(
+                connection=connection,
+                mode=mode,
+                memory=memory,
+            )
         finally:
-            # TODO: skip this for in-memory databases
-            if mode is Mode.READ_WRITE:
+            if not memory and mode is Mode.READ_WRITE:
                 cursor.execute('PRAGMA analysis_limit=8192')
                 cursor.execute('PRAGMA optimize')
 
