@@ -109,6 +109,8 @@ class Database:
     def __init__(self,
         path: Optional[Path] = None,
         mode: Mode = Mode.READ_WRITE,
+        # TODO: Make wal Optional, and have it default to on, but switch self to off when attaching any databases.
+        # Also switch synchronous at the same time.
         wal: bool = False,
         timeout: float = 5.0,
         **kwargs,
@@ -294,7 +296,8 @@ def _connect(
             timeout=timeout,
             isolation_level=None,
             check_same_thread=__debug__,
-            uri=True
+            uri=True,
+            cached_statements=1024,
         )) as connection,
         closing(connection.cursor()) as cursor,
     ):

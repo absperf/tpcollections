@@ -37,8 +37,8 @@ class MappingOrder(str, Enum):
 KeyType = TypeVar('KeyType')
 
 class ViewsBase(Reversible[KeyType], Iterable[KeyType]):
-    __slots__ = (
-    )
+    __slots__ = ()
+
     def __init__(
         self,
         connection: _db.Connection,
