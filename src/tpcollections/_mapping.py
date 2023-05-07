@@ -7,6 +7,7 @@ from typing import (
     Iterable,
     Iterator,
     KeysView,
+    Optional,
     Reversible,
     Tuple,
     TypeVar,
@@ -474,7 +475,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
         assert lifespan > 0
         self._lifespan = lifespan
 
-    def now_function(self, function: Callable[[], int] | None) -> None:
+    def now_function(self, function: Optional[Callable[[], int]]) -> None:
         function_name = self._database + "." + self._table + '_now'
         self._connection.connection.create_function(
             function_name.value,
