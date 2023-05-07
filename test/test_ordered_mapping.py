@@ -38,19 +38,31 @@ class TestExpiringDict(unittest.TestCase):
                 )
                 self.assertEqual(tuple(reversed(d.values())), (1337, 'bar'))
 
-                self.assertEqual(tuple(d.keys(OrderedMapping.Order.KEY)), ('baz', 'foo'))
+                self.assertEqual(
+                    tuple(d.keys(OrderedMapping.Order.KEY)),
+                    ('baz', 'foo'),
+                )
                 self.assertEqual(
                     tuple(d.items(OrderedMapping.Order.KEY)),
                     (('baz', 1337), ('foo', 'bar')),
                 )
-                self.assertEqual(tuple(d.values(OrderedMapping.Order.KEY)), (1337, 'bar'))
+                self.assertEqual(
+                    tuple(d.values(OrderedMapping.Order.KEY)),
+                    (1337, 'bar'),
+                )
 
-                self.assertEqual(tuple(reversed(d.keys(OrderedMapping.Order.KEY))), ('foo', 'baz'))
+                self.assertEqual(
+                    tuple(reversed(d.keys(OrderedMapping.Order.KEY))),
+                    ('foo', 'baz'),
+                )
                 self.assertEqual(
                     tuple(reversed(d.items(OrderedMapping.Order.KEY))),
                     (('foo', 'bar'), ('baz', 1337)),
                 )
-                self.assertEqual(tuple(reversed(d.values(OrderedMapping.Order.KEY))), ('bar', 1337))
+                self.assertEqual(
+                    tuple(reversed(d.values(OrderedMapping.Order.KEY))),
+                    ('bar', 1337),
+                )
 
             with Database(db_path) as db, db:
                 d: OrderedMapping[str, Union[str, int]] = OrderedMapping(db)
@@ -142,8 +154,15 @@ class TestExpiringDict(unittest.TestCase):
             with Database(dir / 'alpha.db') as connection:
                 connection.attach('beta', dir / 'beta.db')
 
-                alpha: OrderedMapping[str, Union[str, int]] = OrderedMapping(connection, table='gamma')
-                beta: OrderedMapping[str, Union[str, int]] = OrderedMapping(connection, database='beta', table='delta')
+                alpha: OrderedMapping[str, Union[str, int]] = OrderedMapping(
+                    connection,
+                    table='gamma',
+                )
+                beta: OrderedMapping[str, Union[str, int]] = OrderedMapping(
+                    connection,
+                    database='beta',
+                    table='delta',
+                )
 
                 with connection:
                     alpha['epsilon'] = 'zeta'
@@ -157,8 +176,15 @@ class TestExpiringDict(unittest.TestCase):
             with Database(dir / 'beta.db') as connection:
                 connection.attach('alpha', dir / 'alpha.db')
 
-                alpha: OrderedMapping[str, Union[str, int]] = OrderedMapping(connection, database='alpha', table='gamma')
-                beta: OrderedMapping[str, Union[str, int]] = OrderedMapping(connection, table='delta')
+                alpha: OrderedMapping[str, Union[str, int]] = OrderedMapping(
+                    connection,
+                    database='alpha',
+                    table='gamma',
+                )
+                beta: OrderedMapping[str, Union[str, int]] = OrderedMapping(
+                    connection,
+                    table='delta',
+                )
 
                 self.assertEqual(alpha['epsilon'], 'zeta')
                 self.assertEqual(beta['eta'], 'theta')

@@ -5,18 +5,9 @@ from ._mapping import (
     ExpiringMapping,
     ExpiringOrderedMapping,
 )
-from._serializers import (
-    Serializer,
-    json,
-    deterministic_json,
-    pickle,
-)
 
 try:
-    from._serializers import (
-        deterministic_orjson,
-        orjson,
-    )
+    pass
 except ImportError:
     pass
 

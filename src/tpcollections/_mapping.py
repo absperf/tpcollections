@@ -36,7 +36,9 @@ class _ViewsBase(Reversible[Item], Iterable[Item]):
 
     def __len__(self) -> int:
         with self._connection.cursor() as cursor:
-            len, = cursor.execute(f'SELECT COUNT(*) FROM {self._database}.{self._table}').fetchone()
+            len, = cursor.execute(
+                f'SELECT COUNT(*) FROM {self._database}.{self._table}'
+            ).fetchone()
             return len
 
     def __iter__(self) -> Iterator[Item]:
@@ -70,9 +72,10 @@ class Keys(_ViewsBase[Key], KeysView[Key]):
     
     def _iterator(self, order: str) -> Iterator[Key]:
         with self._connection.cursor() as cursor:
-            for key, in cursor.execute(
-                f'SELECT key FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
-            ):
+            for key, in cursor.execute(f'''
+                SELECT key FROM {self._database}.{self._table}
+                    ORDER BY {self._order} {order}',
+            '''):
                 yield self._serializer.loads(key)
 
 class Values(_ViewsBase[Any], ValuesView[Value]):
@@ -100,9 +103,10 @@ class Values(_ViewsBase[Any], ValuesView[Value]):
 
     def _iterator(self, order: str) -> Iterator[Value]:
         with self._connection.cursor() as cursor:
-            for value, in cursor.execute(
-                f'SELECT value FROM {self._database}.{self._table} ORDER BY {self._order} {order}',
-            ):
+            for value, in cursor.execute(f'''
+                SELECT value FROM {self._database}.{self._table}
+                    ORDER BY {self._order} {order}
+            '''):
                 yield self._serializer.loads(value)
 
 class Items(_ViewsBase[Tuple[Key, Value]], ItemsView[Key, Value]):
@@ -165,7 +169,9 @@ class _MappingBase(_db._Base, MutableMapping[Key, Value]):
         '''
 
         with self._connection.cursor() as cursor:
-            len, = cursor.execute(f'SELECT COUNT(*) FROM {self._database}.{self._table}').fetchone()
+            len, = cursor.execute(
+                f'SELECT COUNT(*) FROM {self._database}.{self._table}'
+            ).fetchone()
             return len
 
 
