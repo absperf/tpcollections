@@ -1,4 +1,5 @@
 from typing import Optional, Union
+from time import time
 
 class Identifier:
     '''An auto-escaping identifier similar to a string.

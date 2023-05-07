@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# Copyright © 2021 Taylor C. Richberger
-# This code is released under the license described in the LICENSE file
-
 from contextlib import suppress
 from typing import Union
 import unittest

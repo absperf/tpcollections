@@ -434,6 +434,7 @@ class OrderedMapping(_MappingBase[Key, Value]):
 class _ExpiringMappingBase(_MappingBase[Key, Value]):
     __slots__ = (
         '_lifespan',
+        '_now_function',
     )
     def __init__(self,
         connection: _db.Connection,
@@ -455,6 +456,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             type=type,
         )
         self._lifespan = lifespan
+        self._now_function = _db.UNIXEPOCH
 
     @property
     def lifespan(self) -> timedelta:
@@ -466,28 +468,24 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
         assert lifespan > 0
         self._lifespan = lifespan
 
-    def _setup_triggers(self) -> None:
+    def now_function(self, function: Callable[[], int] | None) -> None:
+        function_name = self._database + "." + self._table + '_now'
+        self._connection.connection.create_function(
+            function_name.value,
+            0,
+            function,
+        )
+
+        if function is None:
+            self._now_function = _db.UNIXEPOCH
+        else:
+            self._now_function = f'{function_name}()'
+
+    def delete_expired(self) -> None:
         with self._connection.cursor() as cursor:
-            trigger_name_base = self._database + "." + self._table
-            update_trigger = trigger_name_base + ".update"
-            insert_trigger = trigger_name_base + ".insert"
-
             cursor.execute(f'''
-                CREATE TEMP TRIGGER IF NOT EXISTS {insert_trigger}
-                    AFTER INSERT ON {self._database}.{self._table}
-                BEGIN
-                    DELETE FROM {self._database}.{self._table}
-                        WHERE expire <= {_db.UNIXEPOCH};
-                END
-            ''')
-
-            cursor.execute(f'''
-                CREATE TEMP TRIGGER IF NOT EXISTS {update_trigger}
-                    AFTER UPDATE OF value ON {self._database}.{self._table}
-                BEGIN
-                    DELETE FROM {self._database}.{self._table}
-                        WHERE expire <= {_db.UNIXEPOCH};
-                END
+                DELETE FROM {self._database}.{self._table}
+                    WHERE expires <= {self._now_function};
             ''')
 
     def __setitem__(self, key: Key, value: Value) -> None:
@@ -498,7 +496,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             if sqlite3.sqlite_version_info >= (3, 24):
                 cursor.execute(f'''
                         INSERT INTO {self._database}.{self._table} (key, expires, value)
-                            VALUES (?, ({_db.UNIXEPOCH} + ?), ?)
+                            VALUES (?, ({self._now_function} + ?), ?)
                             ON CONFLICT (key) DO UPDATE
                             SET expires=excluded.expires, value=excluded.value
                     ''',
@@ -512,7 +510,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
                 cursor.execute(f'''
                         UPDATE {self._database}.{self._table}
                             SET value=?3,
-                                expires=({_db.UNIXEPOCH} + ?2)
+                                expires=({self._now_function} + ?2)
                             WHERE key=?1
                     ''',
                     (
@@ -524,7 +522,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             else:
                 cursor.execute(f'''
                         INSERT INTO {self._database}.{self._table} (key, expires, value)
-                            VALUES (?, ({_db.UNIXEPOCH} + ?), ?)
+                            VALUES (?, ({self._now_function} + ?), ?)
                     ''',
                     (
                         self._key_serializer.dumps(key),
@@ -532,6 +530,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
                         self._value_serializer.dumps(value),
                     ),
                 )
+        self.delete_expired()
 
 class ExpiringMapping(_ExpiringMappingBase[Key, Value]):
     '''A database mapping.
@@ -545,7 +544,7 @@ class ExpiringMapping(_ExpiringMappingBase[Key, Value]):
         '''
 
         KEY = 'key'
-        EXPIRE = 'expire'
+        EXPIRES = 'expires'
 
         def __str__(self) -> str:
             return self.value
@@ -586,7 +585,7 @@ class ExpiringMapping(_ExpiringMappingBase[Key, Value]):
 
                 cursor.execute(f'''
                     CREATE INDEX {self._database}.{self._table + "_expires"}
-                        ON {self._database}.{self._table} (expires ASC)
+                        ON {self._table} (expires ASC)
                 ''')
                 version = 1
 
@@ -595,8 +594,6 @@ class ExpiringMapping(_ExpiringMappingBase[Key, Value]):
 
         if version != previous_version:
             self._version = version
-
-        self._setup_triggers()
 
     def keys(self, order: Order = Order.KEY) -> Keys[Key]:
         '''Iterate over keys in the table.
@@ -626,7 +623,7 @@ class ExpiringOrderedMapping(_ExpiringMappingBase[Key, Value]):
 
         ID = 'id'
         KEY = 'key'
-        EXPIRE = 'expire'
+        EXPIRES = 'expires'
 
         def __str__(self) -> str:
             return self.value
@@ -668,7 +665,7 @@ class ExpiringOrderedMapping(_ExpiringMappingBase[Key, Value]):
 
                 cursor.execute(f'''
                     CREATE INDEX {self._database}.{self._table + "_expires"}
-                        ON {self._database}.{self._table} (expires ASC)
+                        ON {self._table} (expires ASC)
                 ''')
                 version = 1
 
@@ -677,8 +674,6 @@ class ExpiringOrderedMapping(_ExpiringMappingBase[Key, Value]):
 
         if version != previous_version:
             self._version = version
-
-        self._setup_triggers()
 
     def keys(self, order: Order = Order.ID) -> Keys[Key]:
         '''Iterate over keys in the table.
