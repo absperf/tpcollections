@@ -441,7 +441,6 @@ class OrderedMapping(_MappingBase[Key, Value]):
 class _ExpiringMappingBase(_MappingBase[Key, Value]):
     __slots__ = (
         '_lifespan',
-        '_now_function',
     )
     def __init__(self,
         connection: _db.Connection,
@@ -463,7 +462,6 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             type=type,
         )
         self._lifespan = lifespan
-        self._now_function = _db.UNIXEPOCH
 
     @property
     def lifespan(self) -> timedelta:
@@ -475,24 +473,11 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
         assert lifespan > 0
         self._lifespan = lifespan
 
-    def now_function(self, function: Optional[Callable[[], int]]) -> None:
-        function_name = self._database + "." + self._table + '_now'
-        self._connection.connection.create_function(
-            function_name.value,
-            0,
-            function,
-        )
-
-        if function is None:
-            self._now_function = _db.UNIXEPOCH
-        else:
-            self._now_function = f'{function_name}()'
-
     def delete_expired(self) -> None:
         with self._connection.cursor() as cursor:
             cursor.execute(f'''
                 DELETE FROM {self._database}.{self._table}
-                    WHERE expires <= {self._now_function};
+                    WHERE expires <= unixepoch();
             ''')
 
     def __setitem__(self, key: Key, value: Value) -> None:
@@ -503,7 +488,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             if sqlite3.sqlite_version_info >= (3, 24):
                 cursor.execute(f'''
                         INSERT INTO {self._database}.{self._table} (key, expires, value)
-                            VALUES (?, ({self._now_function} + ?), ?)
+                            VALUES (?, (unixepoch() + ?), ?)
                             ON CONFLICT (key) DO UPDATE
                             SET expires=excluded.expires, value=excluded.value
                     ''',
@@ -517,7 +502,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
                 cursor.execute(f'''
                         UPDATE {self._database}.{self._table}
                             SET value=?3,
-                                expires=({self._now_function} + ?2)
+                                expires=(unixepoch() + ?2)
                             WHERE key=?1
                     ''',
                     (
@@ -529,7 +514,7 @@ class _ExpiringMappingBase(_MappingBase[Key, Value]):
             else:
                 cursor.execute(f'''
                         INSERT INTO {self._database}.{self._table} (key, expires, value)
-                            VALUES (?, ({self._now_function} + ?), ?)
+                            VALUES (?, (unixepoch() + ?), ?)
                     ''',
                     (
                         self._key_serializer.dumps(key),

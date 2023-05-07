@@ -12,11 +12,11 @@ class TestExpiringDict(unittest.TestCase):
 
             with Database(db_path) as db, db:
                 d = ExpiringOrderedMapping(db, lifespan=timedelta(seconds=10))
-                d.now_function(lambda: 10)
+                db.connection.create_function('unixepoch', 0, lambda: 10)
                 d['alpha'] = 1
-                d.now_function(lambda: 15)
+                db.connection.create_function('unixepoch', 0, lambda: 15)
                 d['foo'] = 'bar'
-                d.now_function(lambda: 20)
+                db.connection.create_function('unixepoch', 0, lambda: 20)
                 d['baz'] = 1337
 
                 self.assertTrue(bool(d))
@@ -66,9 +66,9 @@ class TestExpiringDict(unittest.TestCase):
                     table='natural',
                     lifespan=timedelta(seconds=2),
                 )
-                d.now_function(lambda: int(time()) - 2)
+                db.connection.create_function('unixepoch', 0, lambda: int(time()) - 2)
                 d['alpha'] = 1
-                d.now_function(None)
+                db.connection.create_function('unixepoch', 0, lambda: int(time()))
                 d['foo'] = 'bar'
                 d['baz'] = 1337
 

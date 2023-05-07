@@ -3,6 +3,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from types import TracebackType
 from typing import ContextManager, Generator, List, Optional, Set, Type
+from time import time
 from enum import auto, unique, Enum
 import warnings
 
@@ -164,11 +165,6 @@ if sqlite3.sqlite_version_info >= (3, 37):
 if sqlite3.sqlite_version_info >= (3, 8, 2):
     WITHOUT_ROWID = 'WITHOUT ROWID'
 
-if sqlite3.sqlite_version_info >= (3, 38):
-    UNIXEPOCH = 'UNIXEPOCH()'
-else:
-    UNIXEPOCH = "CAST(strftime('%s', 'now') AS INTEGER)"
-
 _APPLICATION_ID = -1238962565
 
 STRICT_WITHOUT_ROWID = ', '.join(part for part in (STRICT, WITHOUT_ROWID) if part)
@@ -227,6 +223,13 @@ class Connection:
                         version INTEGER NOT NULL
                     ) {STRICT_WITHOUT_ROWID}
                 ''')
+
+        if sqlite3.sqlite_version_info < (3, 38):
+            self._connection.create_function(
+                'unixepoch',
+                0,
+                lambda: int(time())
+            )
 
     @property
     def connection(self) -> sqlite3.Connection:
