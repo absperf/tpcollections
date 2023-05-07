@@ -75,7 +75,7 @@ class Keys(_ViewsBase[Key], KeysView[Key]):
         with self._connection.cursor() as cursor:
             for key, in cursor.execute(f'''
                 SELECT key FROM {self._database}.{self._table}
-                    ORDER BY {self._order} {order}',
+                    ORDER BY {self._order} {order}
             '''):
                 yield self._serializer.loads(key)
 
